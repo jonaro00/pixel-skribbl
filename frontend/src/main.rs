@@ -16,12 +16,18 @@ fn app() -> Html {
             box-sizing: border-box;
         }
 
-        .white {
-            background-color: white;
-        }
-        .black {
-            background-color: black;
-        }
+        .white { background-color: white; }
+        .gray { background-color: gray; }
+        .black { background-color: black; }
+        .red { background-color: red; }
+        .orange { background-color: orange; }
+        .yellow { background-color: yellow; }
+        .lime { background-color: lime; }
+        .green { background-color: green; }
+        .blue { background-color: blue; }
+        .cyan { background-color: cyan; }
+        .magenta { background-color: magenta; }
+        .purple { background-color: purple; }
     "#
     );
     let style = use_style!(
@@ -29,6 +35,7 @@ fn app() -> Html {
         display: flex;
         justify-content: center;
         max-width: 1000px;
+        margin: auto;
     "#
     );
     html! {
@@ -72,24 +79,64 @@ mod components {
 
             let style = use_style!(
                 r#"
+
+            "#
+            );
+            let canvas_style = use_style!(
+                r#"
                 display: grid;
                 grid-template-columns: repeat(${width}, 1fr);
                 grid-template-rows: repeat(${height}, 1fr);
+                width: 0;
             "#,
                 width = width,
-                height = height
+                height = height,
+            );
+            let controls_style = use_style!(
+                r#"
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px;
+                background-color: #6e7eef5e;
+                padding: 10px;
+                border-radius: 10px;
+
+                > .selectColor {
+                    width: 50px;
+                    height: 50px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                > .selectColor.selected {
+                    border: 2px dashed black;
+                    box-shadow: inset 0 0 9px 5px #ffffff80;
+                }
+            "#
             );
             html! {
-                <>
-                    <div class={classes!("canvas", style)}>{grid}</div>
-                    <div class="controls">{ html! {
-                        Color::iter().map(|c| {
-                            html! {
-                                <div class={classes!("selectColor", c.to_string().to_ascii_lowercase())}></div>
-                            }
-                        }).collect::<Html>()
-                    }}</div>
-                </>
+                <div class={style}>
+                    <div class={classes!("canvas", canvas_style)}>{grid}</div>
+                    <div class={classes!("controls", controls_style)}>
+                        { html! {
+                            Color::iter().map(|c| {
+                                let selected = match *selected_color == c {
+                                    true => Some("selected"),
+                                    _ => None,
+                                };
+                                let onclick = {
+                                    let selected_color = selected_color.clone();
+                                    Callback::from(move |_| selected_color.set(c))
+                                };
+                                html! {
+                                    <div {onclick} class={classes!("selectColor", c.to_string().to_ascii_lowercase(), selected)}></div>
+                                }
+                            }).collect::<Html>()
+                        }}
+                        <div class="selectColor white">{ "Clear" }</div>
+                    </div>
+                </div>
             }
         }
     }
@@ -126,7 +173,7 @@ mod components {
         pub fn pixel(PixelProps { selected_color }: &PixelProps) -> Html {
             let color = use_state_eq(|| Color::default());
 
-            let onclick = {
+            let onmousedown = {
                 let color = color.clone();
                 let selected_color = selected_color.clone();
                 Callback::from(move |_| color.set(selected_color.clone()))
@@ -143,7 +190,7 @@ mod components {
             html! {
                 <div
                     class={classes!("pixel", style, format!("{:?}", *color).to_ascii_lowercase())}
-                    {onclick}
+                    {onmousedown}
                 />
             }
         }
