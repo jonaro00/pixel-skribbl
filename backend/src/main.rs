@@ -8,7 +8,10 @@ use std::sync::Arc;
 // use anyhow::{anyhow, Result};
 use axum::body::{BoxBody, Body, boxed};
 use axum::http::{Uri, Response, StatusCode, Request};
-use axum::{routing::get, Router};
+use axum::{routing::get, Router, Extension};
+use common::FRUITS;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use surrealdb::{Datastore, Session};
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
@@ -18,8 +21,19 @@ const PORT: u16 = 3000;
 
 pub type DB = (Datastore, Session);
 
+// #[derive(Clone)]
 pub struct AppState {
-    db: DB,
+    pub db: DB,
+}
+#[derive(Clone)]
+pub struct GameState {
+    pub prompt: String,
+}
+impl GameState {
+    fn new() -> Self {
+        let mut rng: StdRng = SeedableRng::from_entropy();
+        Self { prompt: FRUITS[rng.gen_range(0..FRUITS.len())].into() }
+    }
 }
 
 #[tokio::main]
@@ -63,8 +77,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // build our application with a single route
     let state = Arc::new(AppState { db });
     let app = Router::new()
-        .route("/", get(pages::homepage))
-        // .nest_service("/static", get_static_file)
+        .route("/ws", get(ws::ws_handler))
+        .layer(Extension(GameState::new()))
         .with_state(state);
 
     // run it with hyper
@@ -105,18 +119,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
 //     }
 // }
 
-mod pages {
-    use std::sync::Arc;
+mod ws{
+    use axum::{
+        extract::ws::{WebSocketUpgrade, WebSocket, Message},
+        response::{IntoResponse, Response}, Extension,
+    };
 
-    use axum::extract::State;
+    use crate::GameState;
 
-    use crate::AppState;
+    pub async fn ws_handler(ws: WebSocketUpgrade, Extension(game_state): Extension<GameState>) -> Response {
+        ws.on_upgrade(|socket| handle_socket(socket, game_state))
+    }
 
-    pub async fn homepage(State(state): State<Arc<AppState>>) -> String {
-        let (ds, ses) = &state.db;
-        // ds.execute(sql, ses, Some(vars), true).await?;
-        println!("{:?}", ses);
-        "Wassup gang".into()
+    async fn handle_socket(mut socket: WebSocket, game_state: GameState) {
+        loop {
+            if socket.send(Message::from(game_state.prompt.clone())).await.is_err() {
+                // client disconnected
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
     }
 }
 

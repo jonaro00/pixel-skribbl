@@ -1,2 +1,10 @@
 [[proxy]]
-backend = "http://localhost:80/api"
+backend = "http://localhost:3000/api"
+
+[[proxy]]
+backend = "ws://localhost:3000/ws"
+ws = true
+
+[[hooks]]
+stage = "pre_build"
+command = "clear"

@@ -343,6 +343,7 @@ dependencies = [
  "anyhow",
  "axum",
  "common",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "surrealdb",
@@ -639,6 +640,10 @@ dependencies = [
 [[package]]
 name = "common"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "strum",
+]
 
 [[package]]
 name = "concurrent-queue"
@@ -1017,9 +1022,14 @@ name = "frontend"
 version = "0.1.0"
 dependencies = [
  "common",
+ "futures",
+ "gloo-net",
  "serde",
+ "serde_json",
  "strum",
  "stylist",
+ "wasm-bindgen-futures",
+ "web-sys",
  "yew",
 ]
 
