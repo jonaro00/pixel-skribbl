@@ -3,6 +3,10 @@ use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
+pub mod chat {
+    tonic::include_proto!("chat");
+}
+
 #[derive(Debug, PartialEq, Clone, Copy, EnumIter, Display, Serialize, Deserialize)]
 pub enum Color {
     Red,
@@ -56,6 +60,12 @@ impl GameState {
         }
     }
 }
+
+// #[derive(Clone, Serialize, Deserialize)]
+// pub struct ChatMessage {
+//     pub user: String,
+//     pub message: String,
+// }
 
 pub const FRUITS: &[&str] = &[
     "Apple",

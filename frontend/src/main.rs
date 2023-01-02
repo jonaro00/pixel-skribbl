@@ -1,3 +1,4 @@
+use common::chat::{chat_client::ChatClient, ChatMessage};
 use components::{canvas::Canvas, navbar::NavBar};
 use stylist::{
     css,
@@ -59,6 +60,13 @@ fn app() -> Html {
 }
 
 fn main() {
+    let mut client = ChatClient::connect("http://localhost:3000/").await.unwrap();
+    let request = tonic::Request::new(
+        ChatMessage {
+            user: "John".into(),
+            message: "Hello".into(),
+        }
+    )
     yew::Renderer::<App>::new().render();
 }
 

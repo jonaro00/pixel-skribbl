@@ -9,7 +9,9 @@ use std::sync::Arc;
 use axum::body::{BoxBody, Body, boxed};
 use axum::http::{Uri, Response, StatusCode, Request};
 use axum::{routing::get, Router, Extension};
-use common::{FRUITS, GameState};
+use common::chat::{ChatMessage, ChatResponse};
+use common::chat::chat_server::{Chat, ChatServer};
+use common::{GameState};
 use surrealdb::{Datastore, Session};
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
@@ -67,6 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app = Router::new()
         .route("/ws", get(ws::ws_handler))
         .layer(Extension(GameState::new()))
+        .nest_service("/grpc", ChatServer::new(ChatService { }))
         .with_state(state);
 
     // run it with hyper
@@ -113,7 +116,7 @@ mod ws{
         response::{IntoResponse, Response}, Extension,
     };
 
-    use crate::GameState;
+    use common::GameState;
 
     pub async fn ws_handler(ws: WebSocketUpgrade, Extension(game_state): Extension<GameState>) -> Response {
         ws.on_upgrade(|socket| handle_socket(socket, game_state))
@@ -125,8 +128,24 @@ mod ws{
                 // client disconnected
                 return;
             }
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
+    }
+}
+
+pub struct ChatService {}
+
+#[tonic::async_trait]
+impl Chat for ChatService {
+    async fn send_message(&self, message: tonic::Request<ChatMessage>) -> Result<tonic::Response<ChatResponse>, tonic::Status> {
+        println!("Got a chat message: {:?}", message);
+
+        let msg = message.into_inner();
+
+        let reply = ChatResponse {
+            success: true,
+        };
+        Ok(tonic::Response::new(reply))
     }
 }
 
