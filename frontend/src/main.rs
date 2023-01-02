@@ -100,8 +100,8 @@ mod components {
     }
     pub mod canvas {
         use super::pixel::Pixel;
-        use common::{Color, DrawCanvas, FRUITS};
-        use futures::{SinkExt, StreamExt};
+        use common::{Color, DrawCanvas, GameState};
+        use futures::StreamExt;
         use gloo_net::websocket::{futures::WebSocket, Message};
         use strum::IntoEnumIterator;
         use stylist::yew::use_style;
@@ -113,39 +113,32 @@ mod components {
         pub fn canvas() -> Html {
             let width = use_state_eq(|| 12usize);
             let height = use_state_eq(|| 12usize);
-            let dc = DrawCanvas {
-                width: *width,
-                height: *height,
-                grid: vec![Color::default(); *width * *height],
-            };
+            let dc = DrawCanvas::default();
             let grid = use_state_eq(|| dc.grid);
 
-            let prompt = use_state(|| FRUITS[0]);
+            let prompt = use_state(|| "".to_string());
 
             let selected_color = use_state(|| Color::Black);
 
             let _ = use_effect_with_deps(
-                |_| {
-                    let host = web_sys::window().unwrap().location().host().unwrap();
-                    let ws = WebSocket::open(&format!("ws://{host}/ws")).unwrap();
-                    let (mut write, mut read) = ws.split();
-                    spawn_local(async move {
-                        write
-                            .send(Message::Text(String::from("test")))
-                            .await
-                            .unwrap();
-                        write
-                            .send(Message::Text(String::from("test 2")))
-                            .await
-                            .unwrap();
-                    });
-                    spawn_local(async move {
-                        while let Some(Ok(msg)) = read.next().await {
-                            console::log_1(&format!("Received {:?}", msg).into())
-                        }
-                        console::log_1(&"WebSocket Closed".into())
-                    });
-                    ()
+                {
+                    let grid = grid.clone();
+                    let prompt = prompt.clone();
+                    |_| {
+                        let host = web_sys::window().unwrap().location().host().unwrap();
+                        let ws = WebSocket::open(&format!("ws://{host}/ws")).unwrap();
+                        let (mut _write, mut read) = ws.split();
+                        spawn_local(async move {
+                            while let Some(Ok(Message::Text(msg))) = read.next().await {
+                                console::log_1(&format!("Received {:?}", msg).into());
+                                let gs: GameState = serde_json::from_str(&msg).unwrap();
+                                grid.set(gs.canvas.grid);
+                                prompt.set(gs.prompt);
+                            }
+                            console::log_1(&"WebSocket Closed".into());
+                        });
+                        ()
+                    }
                 },
                 (),
             );

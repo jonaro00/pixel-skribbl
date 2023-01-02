@@ -9,9 +9,7 @@ use std::sync::Arc;
 use axum::body::{BoxBody, Body, boxed};
 use axum::http::{Uri, Response, StatusCode, Request};
 use axum::{routing::get, Router, Extension};
-use common::FRUITS;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use common::{FRUITS, GameState};
 use surrealdb::{Datastore, Session};
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
@@ -24,16 +22,6 @@ pub type DB = (Datastore, Session);
 // #[derive(Clone)]
 pub struct AppState {
     pub db: DB,
-}
-#[derive(Clone)]
-pub struct GameState {
-    pub prompt: String,
-}
-impl GameState {
-    fn new() -> Self {
-        let mut rng: StdRng = SeedableRng::from_entropy();
-        Self { prompt: FRUITS[rng.gen_range(0..FRUITS.len())].into() }
-    }
 }
 
 #[tokio::main]
@@ -133,7 +121,7 @@ mod ws{
 
     async fn handle_socket(mut socket: WebSocket, game_state: GameState) {
         loop {
-            if socket.send(Message::from(game_state.prompt.clone())).await.is_err() {
+            if socket.send(Message::from(serde_json::to_string(&game_state).unwrap())).await.is_err() {
                 // client disconnected
                 return;
             }

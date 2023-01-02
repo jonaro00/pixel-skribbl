@@ -1,3 +1,5 @@
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
@@ -27,6 +29,32 @@ pub struct DrawCanvas {
     pub width: usize,
     pub height: usize,
     pub grid: Vec<Color>,
+}
+impl Default for DrawCanvas {
+    fn default() -> Self {
+        Self {
+            width: 12,
+            height: 12,
+            grid: vec![Color::default(); 12 * 12],
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GameState {
+    pub prompt: String,
+    pub canvas: DrawCanvas,
+    pub players: Vec<()>,
+}
+impl GameState {
+    pub fn new() -> Self {
+        let mut rng: StdRng = SeedableRng::from_entropy();
+        Self {
+            prompt: FRUITS[rng.gen_range(0..FRUITS.len())].into(),
+            canvas: DrawCanvas::default(),
+            players: vec![],
+        }
+    }
 }
 
 pub const FRUITS: &[&str] = &[

@@ -641,6 +641,7 @@ dependencies = [
 name = "common"
 version = "0.1.0"
 dependencies = [
+ "rand 0.8.5",
  "serde",
  "strum",
 ]
@@ -1023,6 +1024,7 @@ version = "0.1.0"
 dependencies = [
  "common",
  "futures",
+ "getrandom 0.2.8",
  "gloo-net",
  "serde",
  "serde_json",
