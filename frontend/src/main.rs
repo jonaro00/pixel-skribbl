@@ -1,4 +1,4 @@
-use components::{canvas::Canvas, navbar::NavBar};
+use components::{canvas::Canvas, chat::Chat, navbar::NavBar};
 use stylist::{
     css,
     yew::{use_style, Global},
@@ -43,6 +43,7 @@ fn app() -> Html {
         r#"
         display: flex;
         justify-content: center;
+        gap: 10px;
     "#
     );
     html! {
@@ -52,6 +53,7 @@ fn app() -> Html {
                 <NavBar />
                 <div class={canvas_cont_style}>
                     <Canvas />
+                    <Chat />
                 </div>
             </div>
         </>
@@ -130,12 +132,12 @@ mod components {
                         let (mut _write, mut read) = ws.split();
                         spawn_local(async move {
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
-                                console::log_1(&format!("Received {:?}", msg).into());
+                                console::log_1(&format!("Received on canvas {:?}", msg).into());
                                 let gs: GameState = serde_json::from_str(&msg).unwrap();
                                 grid.set(gs.canvas.grid);
                                 prompt.set(gs.prompt);
                             }
-                            console::log_1(&"WebSocket Closed".into());
+                            console::log_1(&"Canvas WebSocket Closed".into());
                         });
                         ()
                     }
@@ -295,6 +297,101 @@ mod components {
                     class={classes!("pixel", style, format!("{:?}", *color).to_ascii_lowercase())}
                     {onmousedown}
                 />
+            }
+        }
+    }
+    pub mod chat {
+        use std::collections::VecDeque;
+
+        use common::ChatMessage;
+        use futures::StreamExt;
+        use gloo_net::{http::Request, websocket::{futures::WebSocket, Message}};
+        use stylist::yew::use_style;
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen_futures::spawn_local;
+        use web_sys::{HtmlInputElement, console};
+        use yew::prelude::*;
+        #[derive(PartialEq, Properties)]
+        pub struct ChatProps {}
+        #[function_component(Chat)]
+        pub fn chat(props: &ChatProps) -> Html {
+            let ChatProps {} = props;
+            let messages = use_state_eq(|| VecDeque::<ChatMessage>::with_capacity(30));
+            let text = use_state(String::new);
+            let onchange = {
+                let text = text.clone();
+                Callback::from(move |e: Event| {
+                    let text = text.clone();
+                    text.set(
+                        e.target().unwrap().unchecked_into::<HtmlInputElement>().value()
+                    );
+                }
+                )};
+            let onsubmit = {
+                let text = text.clone();
+                Callback::from(move |e: SubmitEvent| {
+                    e.prevent_default();
+                    let text = text.clone();
+                    spawn_local(async move {
+                        Request::post("/api/chat")
+                            .json(&ChatMessage { username: "me".into(), text: (*text).clone() })
+                            .unwrap()
+                            .send()
+                            .await
+                            .unwrap();
+                    });
+                } )}
+            ;
+            let _ = use_effect_with_deps(
+                {
+                    let messages = messages.clone();
+                    |_| {
+                        let host = web_sys::window().unwrap().location().host().unwrap();
+                        let ws = WebSocket::open(&format!("ws://{host}/ws/chat")).unwrap();
+                        let (mut _write, mut read) = ws.split();
+                        spawn_local(async move {
+                            while let Some(Ok(Message::Text(msg))) = read.next().await {
+                                console::log_1(&format!("Received on Chat {:?}", msg).into());
+                                let cm: ChatMessage = serde_json::from_str(&msg).unwrap();
+                                let mut v = (*messages).clone();
+                                v.push_back(cm);
+                                messages.set(v.clone());
+                                console::log_1(&v.len().into());
+                            }
+                            console::log_1(&"Chat WebSocket Closed".into());
+                        });
+                        ()
+                    }
+                },
+                (),
+            );
+            let style = use_style!(
+                r#"
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                min-width: 200px;
+                background-color: #6e7eef5e;
+                padding: 10px;
+                border-radius: 10px;
+                color: #eee;
+            "#
+            );
+            html! {
+                <div class={style}>
+                    <div>{"Users online:"}</div>
+                    <div>
+                        {
+                            messages.iter().map(|msg| html! { <div>{msg.username.clone()}{": "}{msg.text.clone()}</div> }).collect::<Html>()
+                        }
+                    </div>
+                    <div>
+                        <form {onsubmit}>
+                            <input type="text" {onchange} />
+                            <input type="submit" value="Send" />
+                        </form>
+                    </div>
+                </div>
             }
         }
     }

@@ -71,6 +71,12 @@ pub struct SetPixelPost {
     pub color: Color,
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub username: String,
+    pub text: String,
+}
+
 pub const FRUITS: &[&str] = &[
     "Apple",
     "Apricot",

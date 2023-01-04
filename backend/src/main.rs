@@ -13,7 +13,7 @@ use axum::{
     routing::{get, post},
     Extension, Json, Router,
 };
-use common::{GameState, SetPixelPost, FRUITS};
+use common::{GameState, SetPixelPost, FRUITS, ChatMessage};
 use surrealdb::{Datastore, Session};
 use tokio::sync::broadcast::channel;
 use tokio::sync::{broadcast::Sender, RwLock};
@@ -30,7 +30,7 @@ pub struct AppState {
     pub game_state: RwLock<GameState>,
     pub game_channel: Sender<bool>,
     pub canvas_channel: Sender<bool>,
-    pub chat_channel: Sender<bool>,
+    pub chat_channel: Sender<ChatMessage>,
 }
 
 #[tokio::main]
@@ -84,12 +84,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "/ws/canvas",
             get(|w, e| ws::ws_handler(w, e, ws::WsStreamType::Canvas)),
         )
+        .route(
+            "/ws/chat",
+            get(|w, e| ws::ws_handler(w, e, ws::WsStreamType::Chat)),
+        )
         .layer(Extension(state.clone()))
         .nest(
             "/api",
             Router::new()
                 .route("/set_pixel", post(set_pixel_handler))
-                .route("/clear_canvas", get(clear_canvas_handler)),
+                .route("/clear_canvas", get(clear_canvas_handler))
+                .route("/chat", post(chat_handler)),
         )
         .with_state(state);
 
@@ -120,6 +125,19 @@ async fn clear_canvas_handler(State(state): State<Arc<AppState>>) {
         (*gs).canvas.clear();
     }
     if state.canvas_channel.send(true).is_err() {
+        println!("No receivers");
+    }
+}
+async fn chat_handler(State(state): State<Arc<AppState>>,Json(chat_message): Json<ChatMessage>,) {
+    let ChatMessage { username, mut text } = chat_message;
+    {
+        let mut gs = state.game_state.read().await;
+        if text.trim() == &(*gs).prompt {
+            let mut gs = state.game_state.write().await;
+            text = "guessed the word!".into();
+        }
+    }
+    if state.chat_channel.send(ChatMessage { username, text }).is_err() {
         println!("No receivers");
     }
 }
@@ -170,6 +188,22 @@ mod ws {
                         }
                     }
                     rx.recv().await.expect("Channel recv error");
+                }
+            }
+            WsStreamType::Chat => {
+                let mut rx = state.chat_channel.subscribe();
+                loop {
+                    let msg = rx.recv().await.expect("Channel recv error");
+                    {
+                        if socket
+                            .send(Message::from(serde_json::to_string(&msg).unwrap()))
+                            .await
+                            .is_err()
+                        {
+                            // client disconnected
+                            return;
+                        }
+                    }
                 }
             }
             _ => (),

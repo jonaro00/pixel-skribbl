@@ -5,6 +5,10 @@ backend = "http://localhost:3000/api"
 backend = "ws://localhost:3000/ws/canvas"
 ws = true
 
+[[proxy]]
+backend = "ws://localhost:3000/ws/chat"
+ws = true
+
 [[hooks]]
 stage = "pre_build"
 command = "clear"

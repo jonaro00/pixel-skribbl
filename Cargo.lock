@@ -1029,6 +1029,7 @@ dependencies = [
  "serde_json",
  "strum",
  "stylist",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
  "yew",
