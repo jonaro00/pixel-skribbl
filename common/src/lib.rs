@@ -39,6 +39,14 @@ impl Default for DrawCanvas {
         }
     }
 }
+impl DrawCanvas {
+    pub fn set_pixel(&mut self, i: usize, color: Color) {
+        self.grid[i] = color;
+    }
+    pub fn clear(&mut self) {
+        self.grid = vec![Color::default(); self.width * self.height];
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GameState {
@@ -55,6 +63,12 @@ impl GameState {
             players: vec![],
         }
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SetPixelPost {
+    pub pixel_id: usize,
+    pub color: Color,
 }
 
 pub const FRUITS: &[&str] = &[

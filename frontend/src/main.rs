@@ -100,9 +100,9 @@ mod components {
     }
     pub mod canvas {
         use super::pixel::Pixel;
-        use common::{Color, DrawCanvas, GameState};
+        use common::{Color, DrawCanvas, GameState, SetPixelPost};
         use futures::StreamExt;
-        use gloo_net::websocket::{futures::WebSocket, Message};
+        use gloo_net::{websocket::{futures::WebSocket, Message}, http::Request};
         use strum::IntoEnumIterator;
         use stylist::yew::use_style;
         use wasm_bindgen_futures::spawn_local;
@@ -126,7 +126,7 @@ mod components {
                     let prompt = prompt.clone();
                     |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
-                        let ws = WebSocket::open(&format!("ws://{host}/ws")).unwrap();
+                        let ws = WebSocket::open(&format!("ws://{host}/ws/canvas")).unwrap();
                         let (mut _write, mut read) = ws.split();
                         spawn_local(async move {
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
@@ -156,6 +156,8 @@ mod components {
                 background-color: #ffffffcc;
                 font-size: 1.5em;
                 padding: 5px;
+                font-family: monospace;
+                letter-spacing: .2em;
             "#
             );
             let canvas_style = use_style!(
@@ -195,7 +197,12 @@ mod components {
             );
             html! {
                 <div class={style}>
-                    <div class={classes!("prompt", prompt_style)}>{prompt.to_ascii_lowercase()}</div>
+                    <div class={classes!("prompt", prompt_style)}>
+                        {prompt.to_ascii_lowercase()}
+                        {if prompt.is_empty() { html! { <></> } } else {
+                            html! { <sub style={"font-family: sans-serif; font-size: 60%"} > {prompt.chars().map(|c| (c != ' ') as usize).sum::<usize>()}</sub> }
+                        }}
+                    </div>
                     <div class={classes!("canvas", canvas_style)}>{
                         (0..*height)
                         .map(|y| {
@@ -203,14 +210,18 @@ mod components {
                                 .map(|x| {
                                     let pos = y * *height + x;
                                     let onclick = {
-                                        let grid = grid.clone();
+                                        // let grid = grid.clone();
                                         let selected_color = selected_color.clone();
                                         Callback::from(move |_| {
-                                            let mut v = (*grid).clone();
-                                            if let Some(elem) = v.get_mut(pos) {
-                                                *elem = *selected_color;
-                                            }
-                                            grid.set(v);
+                                            let selected_color = selected_color.clone();
+                                            spawn_local(async move {
+                                                Request::post("/api/set_pixel")
+                                                    .json(&SetPixelPost { pixel_id: pos, color: *selected_color })
+                                                    .unwrap()
+                                                    .send()
+                                                    .await
+                                                    .unwrap();
+                                            });
                                         })
                                     };
                                     html! {
@@ -238,9 +249,13 @@ mod components {
                             }).collect::<Html>()
                         }
                         <div onclick={{
-                            let grid = grid.clone();
                             Callback::from(move |_| {
-                                grid.set(vec![Color::default(); *width * *height])
+                                spawn_local(async move {
+                                    Request::get("/api/clear_canvas")
+                                        .send()
+                                        .await
+                                        .unwrap();
+                                });
                             })
                         }} class="selectColor white">{ "Clear" }</div>
                     </div>
