@@ -52,16 +52,69 @@ impl DrawCanvas {
 pub struct GameState {
     pub prompt: String,
     pub canvas: DrawCanvas,
-    pub players: Vec<()>,
+    pub players: Vec<Player>,
 }
 impl GameState {
     pub fn new() -> Self {
-        let mut rng: StdRng = SeedableRng::from_entropy();
         Self {
-            prompt: FRUITS[rng.gen_range(0..FRUITS.len())].into(),
+            prompt: Self::random_prompt(None),
             canvas: DrawCanvas::default(),
             players: vec![],
         }
+    }
+    fn random_prompt(not: Option<&str>) -> String {
+        let mut rng: StdRng = SeedableRng::from_entropy();
+        loop {
+            let p = FRUITS[rng.gen_range(0..FRUITS.len())].to_ascii_lowercase();
+            match not {
+                Some(prev) => {
+                    if p != prev {
+                        return p;
+                    }
+                }
+                None => return p,
+            }
+        }
+    }
+    pub fn add_player(&mut self, mut player: Player) -> bool {
+        if self.players.contains(&player) {return false;}
+        player.active = !self.players.is_empty();
+        self.players.push(player);
+        true
+    }
+    pub fn new_round(&mut self) {
+        self.canvas.clear();
+        self.prompt = Self::random_prompt(Some(&self.prompt));
+        let i = match self.players.iter_mut().position(|p| {
+            let b = p.active;
+            p.active = false;
+            b
+        }) {
+            Some(j) => (j + 1) % self.players.len(),
+            None => 0,
+        };
+        self.players[i].active = true;
+    }
+}
+
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoginPost {
+    pub username: String,
+    pub password: String, // xdd
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Player {
+    pub username: String,
+    pub active: bool,
+}
+impl PartialEq for Player {
+    fn eq(&self, other: &Self) -> bool {
+        self.username == other.username
+    }
+    fn ne(&self, other: &Self) -> bool {
+        self.username != other.username
     }
 }
 

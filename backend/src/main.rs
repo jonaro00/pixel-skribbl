@@ -10,11 +10,17 @@ use axum::{
     body::{boxed, Body, BoxBody},
     extract::{Path, State},
     http::{Request, Response, StatusCode, Uri},
+    response::Redirect,
     routing::{get, post},
     Extension, Json, Router,
 };
-use common::{GameState, SetPixelPost, FRUITS, ChatMessage};
-use surrealdb::{Datastore, Session};
+use axum_sessions::{
+    async_session::MemoryStore,
+    extractors::{ReadableSession, WritableSession},
+    PersistencePolicy, SessionLayer,
+};
+use common::{ChatMessage, GameState, LoginPost, Player, SetPixelPost, FRUITS};
+// use surrealdb::{Datastore, Session};
 use tokio::sync::broadcast::channel;
 use tokio::sync::{broadcast::Sender, RwLock};
 use tower::ServiceExt;
@@ -22,11 +28,11 @@ use tower_http::services::ServeDir;
 
 const PORT: u16 = 3000;
 
-pub type DB = (Datastore, Session);
+// pub type DB = (Datastore, Session);
 
 // #[derive(Clone)]
 pub struct AppState {
-    pub db: DB,
+    // pub db: DB,
     pub game_state: RwLock<GameState>,
     pub game_channel: Sender<bool>,
     pub canvas_channel: Sender<bool>,
@@ -35,11 +41,11 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let db: DB = (
-        Datastore::new("file://temp.db").await?,
-        Session::for_db("my_ns", "my_db"),
-    );
-    let (ds, ses) = &db;
+    // let db: DB = (
+    //     Datastore::new("file://temp.db").await?,
+    //     Session::for_db("my_ns", "my_db"),
+    // );
+    // let (ds, ses) = &db;
 
     // // --- Create
     // let t1 = create_task(db, "Task 01", 10).await?;
@@ -71,9 +77,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //     println!("record {}", object?);
     // }
 
-    // build our application with a single route
+    let store = MemoryStore::new();
+    let secret = include_bytes!("../../secret"); // MUST be at least 64 bytes!
+    let session_layer = SessionLayer::new(store, secret);
+
     let state = Arc::new(AppState {
-        db,
+        // db,
         game_state: RwLock::new(GameState::new()),
         game_channel: channel(128).0,
         canvas_channel: channel(128).0,
@@ -94,11 +103,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Router::new()
                 .route("/set_pixel", post(set_pixel_handler))
                 .route("/clear_canvas", get(clear_canvas_handler))
-                .route("/chat", post(chat_handler)),
+                .route("/chat", post(chat_handler))
+                .route("/player", get(get_player))
+                .route("/login", post(login))
+                .route(
+                    "/logout",
+                    get(|mut s: WritableSession| async move {
+                        s.destroy();
+                        Redirect::temporary("/")
+                    }),
+                ),
         )
+        .layer(session_layer)
         .with_state(state);
 
-    // run it with hyper
     println!("Listening on port {PORT}");
     axum::Server::bind(&format!("0.0.0.0:{PORT}").parse()?)
         .serve(app.into_make_service())
@@ -107,10 +125,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+async fn login(
+    mut session: WritableSession,
+    Json(LoginPost { username, password }): Json<LoginPost>,
+) -> StatusCode {
+    session.insert(
+        "user",
+        Player {
+            username,
+            active: false,
+        },
+    );
+    StatusCode::OK
+}
+
+async fn get_player(session: ReadableSession) -> Json<Option<Player>> {
+    Json(session.get::<Player>("user"))
+}
+
+async fn verify_session(session: &ReadableSession) -> StatusCode {
+    match session.get::<Player>("user") {
+        Some(_) => StatusCode::OK,
+        None => StatusCode::UNAUTHORIZED,
+    }
+}
+
 async fn set_pixel_handler(
+    session: ReadableSession,
     State(state): State<Arc<AppState>>,
     Json(SetPixelPost { pixel_id, color }): Json<SetPixelPost>,
-) {
+) -> StatusCode {
+    match verify_session(&session).await {
+        StatusCode::UNAUTHORIZED => return StatusCode::UNAUTHORIZED,
+        _ => (),
+    };
     {
         let mut gs = state.game_state.write().await;
         (*gs).canvas.set_pixel(pixel_id, color);
@@ -118,8 +166,16 @@ async fn set_pixel_handler(
     if state.canvas_channel.send(true).is_err() {
         println!("No receivers");
     }
+    StatusCode::OK
 }
-async fn clear_canvas_handler(State(state): State<Arc<AppState>>) {
+async fn clear_canvas_handler(
+    session: ReadableSession,
+    State(state): State<Arc<AppState>>,
+) -> StatusCode {
+    match verify_session(&session).await {
+        StatusCode::UNAUTHORIZED => return StatusCode::UNAUTHORIZED,
+        _ => (),
+    };
     {
         let mut gs = state.game_state.write().await;
         (*gs).canvas.clear();
@@ -127,19 +183,48 @@ async fn clear_canvas_handler(State(state): State<Arc<AppState>>) {
     if state.canvas_channel.send(true).is_err() {
         println!("No receivers");
     }
+    StatusCode::OK
 }
-async fn chat_handler(State(state): State<Arc<AppState>>,Json(chat_message): Json<ChatMessage>,) {
-    let ChatMessage { username, mut text } = chat_message;
+async fn chat_handler(
+    session: ReadableSession,
+    State(state): State<Arc<AppState>>,
+    Json(chat_message): Json<ChatMessage>,
+) -> StatusCode {
+    match verify_session(&session).await {
+        StatusCode::UNAUTHORIZED => return StatusCode::UNAUTHORIZED,
+        _ => (),
+    };
+    let player = session.get::<Player>("user").unwrap();
+    let username = player.username;
+    let text = chat_message.text;
+    let correct = {
+        let gs = state.game_state.read().await;
+        text.trim() == &(*gs).prompt
+    };
+    if state
+        .chat_channel
+        .send(ChatMessage {
+            username: username.clone(),
+            text,
+        })
+        .is_err()
     {
-        let mut gs = state.game_state.read().await;
-        if text.trim() == &(*gs).prompt {
-            let mut gs = state.game_state.write().await;
-            text = "guessed the word!".into();
-        }
-    }
-    if state.chat_channel.send(ChatMessage { username, text }).is_err() {
         println!("No receivers");
     }
+    if correct {
+        let mut gs = state.game_state.write().await;
+        if state
+            .chat_channel
+            .send(ChatMessage {
+                username: "SYSTEM".into(),
+                text: format!("{username} guessed the right word!"),
+            })
+            .is_err()
+        {
+            println!("No receivers");
+        }
+    }
+    StatusCode::OK
 }
 
 mod ws {
@@ -153,6 +238,8 @@ mod ws {
         response::{IntoResponse, Response},
         Extension,
     };
+    use axum_sessions::extractors::ReadableSession;
+    use common::{Player, ChatMessage};
     use tokio::sync::RwLock;
 
     use crate::{AppState, GameState};
@@ -165,33 +252,48 @@ mod ws {
 
     pub async fn ws_handler(
         ws: WebSocketUpgrade,
+        // session: ReadableSession,
         Extension(app_state): Extension<Arc<AppState>>,
         st: WsStreamType,
     ) -> Response {
-        ws.on_upgrade(move |socket| handle_socket(socket, app_state, st))
+        ws.on_upgrade(move |socket| handle_socket(socket, /*session,*/ app_state, st))
     }
 
-    async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, st: WsStreamType) {
+    async fn handle_socket(mut socket: WebSocket, /*session: ReadableSession,*/ state: Arc<AppState>, st: WsStreamType) {
         match st {
             WsStreamType::Canvas => {
                 let mut rx = state.canvas_channel.subscribe();
                 loop {
+                    let gs = { (*state.game_state.read().await).clone() };
+                    if socket
+                        .send(Message::from(serde_json::to_string(&gs).unwrap()))
+                        .await
+                        .is_err()
                     {
-                        let gs = state.game_state.read().await;
-                        if socket
-                            .send(Message::from(serde_json::to_string(&*gs).unwrap()))
-                            .await
-                            .is_err()
-                        {
-                            // client disconnected
-                            return;
-                        }
+                        // client disconnected
+                        return;
                     }
                     rx.recv().await.expect("Channel recv error");
                 }
             }
             WsStreamType::Chat => {
+                // let (new, player) = if let Some(player) = session.get::<Player>("user") {
+                //     let mut gs = state.game_state.write().await;
+                //     (gs.add_player(player.clone()), Some(player))
+                // } else {(false, None)};
                 let mut rx = state.chat_channel.subscribe();
+                // if new {
+                //     if state
+                //         .chat_channel
+                //         .send(ChatMessage {
+                //             username: "SYSTEM".into(),
+                //             text: format!("{} joined!", player.unwrap().username),
+                //         })
+                //         .is_err()
+                //     {
+                //         println!("No receivers");
+                //     }
+                // }
                 loop {
                     let msg = rx.recv().await.expect("Channel recv error");
                     {
@@ -211,51 +313,51 @@ mod ws {
     }
 }
 
-mod api {
-    use anyhow::{anyhow, Result};
-    use std::collections::BTreeMap;
-    use surrealdb::{
-        sql::{thing, Datetime, Object, Thing, Value},
-        Datastore, Response, Session,
-    };
+// mod api {
+//     use anyhow::{anyhow, Result};
+//     use std::collections::BTreeMap;
+//     use surrealdb::{
+//         sql::{thing, Datetime, Object, Thing, Value},
+//         Datastore, Response, Session,
+//     };
 
-    use crate::DB;
+//     use crate::DB;
 
-    async fn create_task((ds, ses): &DB, title: &str, priority: i32) -> Result<String> {
-        let sql = "CREATE task CONTENT $data";
+//     async fn create_task((ds, ses): &DB, title: &str, priority: i32) -> Result<String> {
+//         let sql = "CREATE task CONTENT $data";
 
-        let data: BTreeMap<String, Value> = [
-            ("title".into(), title.into()),
-            ("priority".into(), priority.into()),
-        ]
-        .into();
-        let vars: BTreeMap<String, Value> = [("data".into(), data.into())].into();
+//         let data: BTreeMap<String, Value> = [
+//             ("title".into(), title.into()),
+//             ("priority".into(), priority.into()),
+//         ]
+//         .into();
+//         let vars: BTreeMap<String, Value> = [("data".into(), data.into())].into();
 
-        let ress = ds.execute(sql, ses, Some(vars), false).await?;
+//         let ress = ds.execute(sql, ses, Some(vars), false).await?;
 
-        into_iter_objects(ress)?
-            .next()
-            .transpose()?
-            .and_then(|obj| obj.get("id").map(|id| id.to_string()))
-            .ok_or_else(|| anyhow!("No id returned."))
-    }
+//         into_iter_objects(ress)?
+//             .next()
+//             .transpose()?
+//             .and_then(|obj| obj.get("id").map(|id| id.to_string()))
+//             .ok_or_else(|| anyhow!("No id returned."))
+//     }
 
-    /// Returns Result<impl Iterator<Item = Result<Object>>>
-    fn into_iter_objects(ress: Vec<Response>) -> Result<impl Iterator<Item = Result<Object>>> {
-        let res = ress.into_iter().next().map(|rp| rp.result).transpose()?;
+//     /// Returns Result<impl Iterator<Item = Result<Object>>>
+//     fn into_iter_objects(ress: Vec<Response>) -> Result<impl Iterator<Item = Result<Object>>> {
+//         let res = ress.into_iter().next().map(|rp| rp.result).transpose()?;
 
-        match res {
-            Some(Value::Array(arr)) => {
-                let it = arr.into_iter().map(|v| match v {
-                    Value::Object(object) => Ok(object),
-                    _ => Err(anyhow!("A record was not an Object")),
-                });
-                Ok(it)
-            }
-            _ => Err(anyhow!("No records found.")),
-        }
-    }
-}
+//         match res {
+//             Some(Value::Array(arr)) => {
+//                 let it = arr.into_iter().map(|v| match v {
+//                     Value::Object(object) => Ok(object),
+//                     _ => Err(anyhow!("A record was not an Object")),
+//                 });
+//                 Ok(it)
+//             }
+//             _ => Err(anyhow!("No records found.")),
+//         }
+//     }
+// }
 
 // async fn handler(uri: Uri) -> Result<Response<BoxBody>, (StatusCode, String)> {
 //     let res = get_static_file(uri.clone()).await?;

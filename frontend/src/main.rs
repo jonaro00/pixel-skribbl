@@ -1,9 +1,13 @@
 use components::{canvas::Canvas, chat::Chat, navbar::NavBar};
+use gloo_net::http::Request;
 use stylist::{
     css,
     yew::{use_style, Global},
 };
+use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
+
+use common::Player;
 
 #[function_component(App)]
 fn app() -> Html {
@@ -46,16 +50,35 @@ fn app() -> Html {
         gap: 10px;
     "#
     );
+    let player = use_state(|| None as Option<Player>);
+    let _ = use_effect_with_deps({
+        let player = player.clone();
+        |_| {
+            spawn_local(async move {
+                let p = Request::get("/api/player")
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
+                player.set(p);
+            });
+        }
+    },
+    ());
     html! {
         <>
             <Global css={glob_style}/>
-            <div class={wrapper_style}>
-                <NavBar />
-                <div class={canvas_cont_style}>
-                    <Canvas />
-                    <Chat />
+            <ContextProvider<Option<Player>> context={(*player).clone()}>
+                <div class={wrapper_style}>
+                    <NavBar />
+                    <div class={canvas_cont_style}>
+                        <Canvas />
+                        <Chat />
+                    </div>
                 </div>
-            </div>
+            </ContextProvider<Option<Player>>>
         </>
     }
 }
@@ -66,7 +89,12 @@ fn main() {
 
 mod components {
     pub mod navbar {
+        use common::{LoginPost, Player};
+        use gloo_net::http::Request;
         use stylist::yew::use_style;
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen_futures::spawn_local;
+        use web_sys::HtmlInputElement;
         use yew::prelude::*;
         #[derive(PartialEq, Properties)]
         pub struct NavBarProps {}
@@ -74,15 +102,16 @@ mod components {
         #[function_component]
         pub fn NavBar(props: &NavBarProps) -> Html {
             let NavBarProps {} = props;
+            let player = use_context::<Option<Player>>().unwrap();
             let style = use_style!(
                 r#"
                 display: flex;
                 flex-wrap: wrap;
                 gap: 5px;
                 background-color: #6e7eef5e;
+                color: #eee;
                 padding: 10px;
                 border-radius: 10px;
-
                 a {
                     background-color: #6e7eef5e;
                     padding: 10px;
@@ -96,7 +125,67 @@ mod components {
                 <div class={style}>
                     <a href="/">{"Draw"}</a>
                     <a href="/gallery">{"Gallery"}</a>
+                    <div style="flex-grow: 1;"></div>
+                    {
+                        if let Some(p) = player {
+                            html! { &format!("Logged in as {}", p.username) }
+                        } else {
+                            html! { <LoginForm /> }
+                        }
+                    }
+                    <a href="/api/logout">{"Log out"}</a>
                 </div>
+            }
+        }
+        #[derive(PartialEq, Properties)]
+        pub struct LoginFormProps {}
+        #[function_component]
+        pub fn LoginForm(props: &LoginFormProps) -> Html {
+            let LoginFormProps {} = props;
+            let username = use_state(String::new);
+            let onchangeu = {
+                let username = username.clone();
+                Callback::from(move |e: Event| {
+                    let username = username.clone();
+                    username.set(
+                        e.target().unwrap().unchecked_into::<HtmlInputElement>().value()
+                    );
+                }
+            )};
+            let password = use_state(String::new);
+            let onchangep = {
+                let password = password.clone();
+                Callback::from(move |e: Event| {
+                    let password = password.clone();
+                    password.set(
+                        e.target().unwrap().unchecked_into::<HtmlInputElement>().value()
+                    );
+                }
+            )};
+            let onsubmit = {
+                let username = username.clone();
+                let password = password.clone();
+                Callback::from(move |e: SubmitEvent| {
+                    e.prevent_default();
+                    let username = username.clone();
+                    let password = password.clone();
+                    spawn_local(async move {
+                        Request::post("/api/login")
+                        .json(&LoginPost { username: (*username).clone(), password: (*password).clone() })
+                        .unwrap()
+                        .send()
+                        .await
+                        .unwrap();
+                    });
+                    web_sys::window().unwrap().location().reload().unwrap();
+                } )}
+            ;
+            html! {
+                <form {onsubmit}>
+                    <input type="text" value={(*username).clone()} onchange={onchangeu} />
+                    <input type="password" value={(*password).clone()} onchange={onchangep} />
+                    <input type="submit" value="Log in" />
+                </form>
             }
         }
     }
@@ -202,7 +291,13 @@ mod components {
                     <div class={classes!("prompt", prompt_style)}>
                         {prompt.to_ascii_lowercase()}
                         {if prompt.is_empty() { html! { <></> } } else {
-                            html! { <sub style={"font-family: sans-serif; font-size: 60%"} > {prompt.chars().map(|c| (c != ' ') as usize).sum::<usize>()}</sub> }
+                            html! {
+                                <sub style={"font-family: sans-serif; font-size: 60%; letter-spacing: normal;"}>
+                                    {
+                                        prompt.chars().map(|c| (c != ' ') as usize).sum::<usize>()
+                                    }
+                                </sub>
+                            }
                         }}
                     </div>
                     <div class={classes!("canvas", canvas_style)}>{
@@ -301,22 +396,22 @@ mod components {
         }
     }
     pub mod chat {
-        use std::collections::VecDeque;
-
+        use bounded_vec_deque::BoundedVecDeque;
         use common::ChatMessage;
         use futures::StreamExt;
         use gloo_net::{http::Request, websocket::{futures::WebSocket, Message}};
         use stylist::yew::use_style;
         use wasm_bindgen::JsCast;
         use wasm_bindgen_futures::spawn_local;
-        use web_sys::{HtmlInputElement, console};
+        use web_sys::{HtmlInputElement, console, };
         use yew::prelude::*;
         #[derive(PartialEq, Properties)]
         pub struct ChatProps {}
         #[function_component(Chat)]
         pub fn chat(props: &ChatProps) -> Html {
             let ChatProps {} = props;
-            let messages = use_state_eq(|| VecDeque::<ChatMessage>::with_capacity(30));
+            let messages = use_mut_ref(|| BoundedVecDeque::<ChatMessage>::new(50));
+            let messages_update = use_force_update();
             let text = use_state(String::new);
             let onchange = {
                 let text = text.clone();
@@ -332,31 +427,34 @@ mod components {
                 Callback::from(move |e: SubmitEvent| {
                     e.prevent_default();
                     let text = text.clone();
-                    spawn_local(async move {
-                        Request::post("/api/chat")
-                            .json(&ChatMessage { username: "me".into(), text: (*text).clone() })
+                    if !text.is_empty() {
+                        spawn_local(async move {
+                            Request::post("/api/chat")
+                            .json(&ChatMessage { username: "".into(), text: (*text).clone() })
                             .unwrap()
                             .send()
                             .await
                             .unwrap();
-                    });
+                        });
+                    }
                 } )}
             ;
             let _ = use_effect_with_deps(
                 {
+                    let text = text.clone();
                     let messages = messages.clone();
                     |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
                         let ws = WebSocket::open(&format!("ws://{host}/ws/chat")).unwrap();
                         let (mut _write, mut read) = ws.split();
                         spawn_local(async move {
+                        let text = text.clone();
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
                                 console::log_1(&format!("Received on Chat {:?}", msg).into());
                                 let cm: ChatMessage = serde_json::from_str(&msg).unwrap();
-                                let mut v = (*messages).clone();
-                                v.push_back(cm);
-                                messages.set(v.clone());
-                                console::log_1(&v.len().into());
+                                (*messages).borrow_mut().push_back(cm);
+                                messages_update.force_update();
+                                text.set(String::new());
                             }
                             console::log_1(&"Chat WebSocket Closed".into());
                         });
@@ -370,24 +468,45 @@ mod components {
                 display: flex;
                 flex-direction: column;
                 gap: 10px;
-                min-width: 200px;
+                max-width: 245px;
+                max-height: 596px;
                 background-color: #6e7eef5e;
                 padding: 10px;
                 border-radius: 10px;
                 color: #eee;
+                word-break: break-word;
+            "#
+            );
+            let chat_style = use_style!(
+                r#"
+                flex-grow: 1;
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-end;
+                gap: 3px;
+                width: 100%;
+                overflow-y: auto;
             "#
             );
             html! {
                 <div class={style}>
                     <div>{"Users online:"}</div>
-                    <div>
+                    <div class={chat_style}>
                         {
-                            messages.iter().map(|msg| html! { <div>{msg.username.clone()}{": "}{msg.text.clone()}</div> }).collect::<Html>()
+                            (*messages)
+                                .borrow()
+                                .iter()
+                                .map(
+                                    |msg| html! {
+                                        <div><b>{msg.username.clone()}</b>{": "}{msg.text.clone()}</div>
+                                    }
+                                )
+                                .collect::<Html>()
                         }
                     </div>
                     <div>
                         <form {onsubmit}>
-                            <input type="text" {onchange} />
+                            <input type="text" value={(*text).clone()} {onchange} />
                             <input type="submit" value="Send" />
                         </form>
                     </div>
