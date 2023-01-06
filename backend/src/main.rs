@@ -17,10 +17,10 @@ use axum::{
 use axum_sessions::{
     async_session::MemoryStore,
     extractors::{ReadableSession, WritableSession},
-    PersistencePolicy, SessionLayer,
+    SessionLayer,
 };
 use common::{ChatMessage, GameState, LoginPost, Player, SetPixelPost, FRUITS};
-// use surrealdb::{Datastore, Session};
+use surrealdb::{Datastore, Session};
 use tokio::sync::broadcast::channel;
 use tokio::sync::{broadcast::Sender, RwLock};
 use tower::ServiceExt;
@@ -28,11 +28,10 @@ use tower_http::services::ServeDir;
 
 const PORT: u16 = 3000;
 
-// pub type DB = (Datastore, Session);
+pub type DB = (Datastore, Session);
 
-// #[derive(Clone)]
 pub struct AppState {
-    // pub db: DB,
+    pub db: DB,
     pub game_state: RwLock<GameState>,
     pub game_channel: Sender<bool>,
     pub canvas_channel: Sender<bool>,
@@ -41,15 +40,15 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // let db: DB = (
-    //     Datastore::new("file://temp.db").await?,
-    //     Session::for_db("my_ns", "my_db"),
-    // );
-    // let (ds, ses) = &db;
+    let db: DB = (
+        Datastore::new("file://temp.db").await?,
+        Session::for_db("my_ns", "my_db"),
+    );
+    let (ds, ses) = &db;
 
-    // // --- Create
-    // let t1 = create_task(db, "Task 01", 10).await?;
-    // let t2 = create_task(db, "Task 02", 7).await?;
+    // --- Create
+    // let t1 = database::create_task(&db, "Task 01", 10).await?;
+    // let t2 = database::create_task(&db, "Task 02", 7).await?;
 
     // // --- Merge
     // let sql = "UPDATE $th MERGE $data RETURN id";
@@ -82,7 +81,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let session_layer = SessionLayer::new(store, secret);
 
     let state = Arc::new(AppState {
-        // db,
+        db,
         game_state: RwLock::new(GameState::new()),
         game_channel: channel(128).0,
         canvas_channel: channel(128).0,
@@ -91,11 +90,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app = Router::new()
         .route(
             "/ws/canvas",
-            get(|w, e| ws::ws_handler(w, e, ws::WsStreamType::Canvas)),
+            get(|w, s, e| ws::ws_handler(w, s, e, ws::WsStreamType::Canvas)),
+        )
+        .route(
+            "/ws/game",
+            get(|w, s, e| ws::ws_handler(w, s, e, ws::WsStreamType::Game)),
         )
         .route(
             "/ws/chat",
-            get(|w, e| ws::ws_handler(w, e, ws::WsStreamType::Chat)),
+            get(|w, s, e| ws::ws_handler(w, s, e, ws::WsStreamType::Chat)),
         )
         .layer(Extension(state.clone()))
         .nest(
@@ -114,6 +117,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }),
                 ),
         )
+        .route("/*file", get(get_static_file))
+        .route("/", get(get_static_file))
         .layer(session_layer)
         .with_state(state);
 
@@ -129,13 +134,15 @@ async fn login(
     mut session: WritableSession,
     Json(LoginPost { username, password }): Json<LoginPost>,
 ) -> StatusCode {
-    session.insert(
-        "user",
-        Player {
-            username,
-            active: false,
-        },
-    );
+    session
+        .insert(
+            "user",
+            Player {
+                username,
+                active: false,
+            },
+        )
+        .expect("Insert fail");
     StatusCode::OK
 }
 
@@ -213,6 +220,13 @@ async fn chat_handler(
     }
     if correct {
         let mut gs = state.game_state.write().await;
+        gs.new_round();
+        if state.game_channel.send(true).is_err() {
+            println!("No receivers");
+        }
+        if state.canvas_channel.send(true).is_err() {
+            println!("No receivers");
+        }
         if state
             .chat_channel
             .send(ChatMessage {
@@ -239,7 +253,7 @@ mod ws {
         Extension,
     };
     use axum_sessions::extractors::ReadableSession;
-    use common::{Player, ChatMessage};
+    use common::{ChatMessage, GameInfo, Player};
     use tokio::sync::RwLock;
 
     use crate::{AppState, GameState};
@@ -252,21 +266,65 @@ mod ws {
 
     pub async fn ws_handler(
         ws: WebSocketUpgrade,
-        // session: ReadableSession,
+        session: ReadableSession,
         Extension(app_state): Extension<Arc<AppState>>,
         st: WsStreamType,
     ) -> Response {
-        ws.on_upgrade(move |socket| handle_socket(socket, /*session,*/ app_state, st))
+        let player = session.get::<Player>("user");
+        ws.on_upgrade(move |socket| handle_socket(socket, player, app_state, st))
     }
 
-    async fn handle_socket(mut socket: WebSocket, /*session: ReadableSession,*/ state: Arc<AppState>, st: WsStreamType) {
+    async fn handle_socket(
+        mut socket: WebSocket,
+        player: Option<Player>,
+        state: Arc<AppState>,
+        st: WsStreamType,
+    ) {
+        let (new, player) = if let Some(player) = player {
+            let mut gs = state.game_state.write().await;
+            (gs.add_player(player.clone()), Some(player))
+        } else {
+            (false, None)
+        };
+        if new {
+            if state.game_channel.send(true).is_err() {
+                println!("No receivers");
+            }
+        }
         match st {
             WsStreamType::Canvas => {
                 let mut rx = state.canvas_channel.subscribe();
                 loop {
-                    let gs = { (*state.game_state.read().await).clone() };
+                    let mut gs = { (*state.game_state.read().await).clone() };
                     if socket
-                        .send(Message::from(serde_json::to_string(&gs).unwrap()))
+                        .send(Message::from(serde_json::to_string(&gs.canvas).unwrap()))
+                        .await
+                        .is_err()
+                    {
+                        // client disconnected
+                        return;
+                    }
+                    rx.recv().await.expect("Channel recv error");
+                }
+            }
+            WsStreamType::Game => {
+                let mut rx = state.game_channel.subscribe();
+                loop {
+                    let gs = { (*state.game_state.read().await).clone() };
+                    let prompt = if !player
+                        .clone()
+                        .map(|ps| gs.players.iter().find(|p| **p == ps).unwrap().active)
+                        .unwrap_or(false)
+                    {
+                        gs.prompt.replace(|c: char| c.is_alphabetic(), "_")
+                    } else {
+                        gs.prompt
+                    };
+                    let players = gs.players;
+                    if socket
+                        .send(Message::from(
+                            serde_json::to_string(&GameInfo { prompt, players }).unwrap(),
+                        ))
                         .await
                         .is_err()
                     {
@@ -277,23 +335,19 @@ mod ws {
                 }
             }
             WsStreamType::Chat => {
-                // let (new, player) = if let Some(player) = session.get::<Player>("user") {
-                //     let mut gs = state.game_state.write().await;
-                //     (gs.add_player(player.clone()), Some(player))
-                // } else {(false, None)};
                 let mut rx = state.chat_channel.subscribe();
-                // if new {
-                //     if state
-                //         .chat_channel
-                //         .send(ChatMessage {
-                //             username: "SYSTEM".into(),
-                //             text: format!("{} joined!", player.unwrap().username),
-                //         })
-                //         .is_err()
-                //     {
-                //         println!("No receivers");
-                //     }
-                // }
+                if player.is_some() {
+                    if state
+                        .chat_channel
+                        .send(ChatMessage {
+                            username: "SYSTEM".into(),
+                            text: format!("{} joined!", player.clone().unwrap().username),
+                        })
+                        .is_err()
+                    {
+                        println!("No receivers");
+                    }
+                }
                 loop {
                     let msg = rx.recv().await.expect("Channel recv error");
                     {
@@ -313,77 +367,61 @@ mod ws {
     }
 }
 
-// mod api {
-//     use anyhow::{anyhow, Result};
-//     use std::collections::BTreeMap;
-//     use surrealdb::{
-//         sql::{thing, Datetime, Object, Thing, Value},
-//         Datastore, Response, Session,
-//     };
+async fn get_static_file(uri: Uri) -> Result<Response<BoxBody>, (StatusCode, String)> {
+    let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
 
-//     use crate::DB;
+    // `ServeDir` implements `tower::Service` so we can call it with `tower::ServiceExt::oneshot`
+    match ServeDir::new("./frontend/dist").oneshot(req).await {
+        Ok(res) => Ok(res.map(boxed)),
+        Err(err) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Something went wrong: {}", err),
+        )),
+    }
+}
 
-//     async fn create_task((ds, ses): &DB, title: &str, priority: i32) -> Result<String> {
-//         let sql = "CREATE task CONTENT $data";
+mod database {
+    use anyhow::{anyhow, Result};
+    use std::collections::BTreeMap;
+    use surrealdb::{
+        sql::{thing, Datetime, Object, Thing, Value},
+        Datastore, Response, Session,
+    };
 
-//         let data: BTreeMap<String, Value> = [
-//             ("title".into(), title.into()),
-//             ("priority".into(), priority.into()),
-//         ]
-//         .into();
-//         let vars: BTreeMap<String, Value> = [("data".into(), data.into())].into();
+    use crate::DB;
 
-//         let ress = ds.execute(sql, ses, Some(vars), false).await?;
+    pub async fn create_task((ds, ses): &DB, title: &str, priority: i32) -> Result<String> {
+        let sql = "CREATE task CONTENT $data";
 
-//         into_iter_objects(ress)?
-//             .next()
-//             .transpose()?
-//             .and_then(|obj| obj.get("id").map(|id| id.to_string()))
-//             .ok_or_else(|| anyhow!("No id returned."))
-//     }
+        let data: BTreeMap<String, Value> = [
+            ("title".into(), title.into()),
+            ("priority".into(), priority.into()),
+        ]
+        .into();
+        let vars: BTreeMap<String, Value> = [("data".into(), data.into())].into();
 
-//     /// Returns Result<impl Iterator<Item = Result<Object>>>
-//     fn into_iter_objects(ress: Vec<Response>) -> Result<impl Iterator<Item = Result<Object>>> {
-//         let res = ress.into_iter().next().map(|rp| rp.result).transpose()?;
+        let ress = ds.execute(sql, ses, Some(vars), false).await?;
 
-//         match res {
-//             Some(Value::Array(arr)) => {
-//                 let it = arr.into_iter().map(|v| match v {
-//                     Value::Object(object) => Ok(object),
-//                     _ => Err(anyhow!("A record was not an Object")),
-//                 });
-//                 Ok(it)
-//             }
-//             _ => Err(anyhow!("No records found.")),
-//         }
-//     }
-// }
+        into_iter_objects(ress)?
+            .next()
+            .transpose()?
+            .and_then(|obj| obj.get("id").map(|id| id.to_string()))
+            .ok_or_else(|| anyhow!("No id returned."))
+    }
 
-// async fn handler(uri: Uri) -> Result<Response<BoxBody>, (StatusCode, String)> {
-//     let res = get_static_file(uri.clone()).await?;
+    /// Returns Result<impl Iterator<Item = Result<Object>>>
+    fn into_iter_objects(ress: Vec<Response>) -> Result<impl Iterator<Item = Result<Object>>> {
+        let res = ress.into_iter().next().map(|rp| rp.result).transpose()?;
 
-//     // if res.status() == StatusCode::NOT_FOUND {
-//     //     // try with `.html`
-//     //     // TODO: handle if the Uri has query parameters
-//     //     match format!("{}.html", uri).parse() {
-//     //         Ok(uri_html) => get_static_file(uri_html).await,
-//     //         Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "Invalid URI".to_string())),
-//     //     }
-//     // } else {
-//     //     Ok(res)
-//     // }
-//     Ok(res)
-// }
-
-// async fn get_static_file(uri: Uri) -> Result<Response<BoxBody>, (StatusCode, String)> {
-//     let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
-
-//     // `ServeDir` implements `tower::Service` so we can call it with `tower::ServiceExt::oneshot`
-//     match ServeDir::new(".").oneshot(req).await {
-//         Ok(res) => Ok(res.map(boxed)),
-//         Err(err) => Err((
-//             StatusCode::INTERNAL_SERVER_ERROR,
-//             format!("Something went wrong: {}", err),
-//         )),
-//     }
-// }
+        match res {
+            Some(Value::Array(arr)) => {
+                let it = arr.into_iter().map(|v| match v {
+                    Value::Object(object) => Ok(object),
+                    _ => Err(anyhow!("A record was not an Object")),
+                });
+                Ok(it)
+            }
+            _ => Err(anyhow!("No records found.")),
+        }
+    }
+}

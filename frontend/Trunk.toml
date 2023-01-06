@@ -5,6 +5,10 @@ watch = [".", "../common"]
 backend = "http://localhost:3000/api"
 
 [[proxy]]
+backend = "ws://localhost:3000/ws/game"
+ws = true
+
+[[proxy]]
 backend = "ws://localhost:3000/ws/canvas"
 ws = true
 

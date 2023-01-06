@@ -77,8 +77,10 @@ impl GameState {
         }
     }
     pub fn add_player(&mut self, mut player: Player) -> bool {
-        if self.players.contains(&player) {return false;}
-        player.active = !self.players.is_empty();
+        if self.players.contains(&player) {
+            return false;
+        }
+        player.active = self.players.is_empty();
         self.players.push(player);
         true
     }
@@ -96,7 +98,11 @@ impl GameState {
         self.players[i].active = true;
     }
 }
-
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GameInfo {
+    pub prompt: String,
+    pub players: Vec<Player>,
+}
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoginPost {
@@ -104,7 +110,7 @@ pub struct LoginPost {
     pub password: String, // xdd
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Player {
     pub username: String,
     pub active: bool,

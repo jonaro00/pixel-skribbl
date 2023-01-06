@@ -1,4 +1,4 @@
-use components::{canvas::Canvas, chat::Chat, navbar::NavBar};
+use components::{game::Game, navbar::NavBar};
 use gloo_net::http::Request;
 use stylist::{
     css,
@@ -43,40 +43,32 @@ fn app() -> Html {
         margin: auto;
     "#
     );
-    let canvas_cont_style = use_style!(
-        r#"
-        display: flex;
-        justify-content: center;
-        gap: 10px;
-    "#
-    );
     let player = use_state(|| None as Option<Player>);
-    let _ = use_effect_with_deps({
-        let player = player.clone();
-        |_| {
-            spawn_local(async move {
-                let p = Request::get("/api/player")
-                    .send()
-                    .await
-                    .unwrap()
-                    .json()
-                    .await
-                    .unwrap();
-                player.set(p);
-            });
-        }
-    },
-    ());
+    let _ = use_effect_with_deps(
+        {
+            let player = player.clone();
+            |_| {
+                spawn_local(async move {
+                    let p = Request::get("/api/player")
+                        .send()
+                        .await
+                        .unwrap()
+                        .json()
+                        .await
+                        .unwrap();
+                    player.set(p);
+                });
+            }
+        },
+        (),
+    );
     html! {
         <>
             <Global css={glob_style}/>
             <ContextProvider<Option<Player>> context={(*player).clone()}>
                 <div class={wrapper_style}>
                     <NavBar />
-                    <div class={canvas_cont_style}>
-                        <Canvas />
-                        <Chat />
-                    </div>
+                    <Game />
                 </div>
             </ContextProvider<Option<Player>>>
         </>
@@ -112,7 +104,7 @@ mod components {
                 color: #eee;
                 padding: 10px;
                 border-radius: 10px;
-                a {
+                & > a, & > form, & > div {
                     background-color: #6e7eef5e;
                     padding: 10px;
                     border-radius: 10px;
@@ -125,10 +117,10 @@ mod components {
                 <div class={style}>
                     <a href="/">{"Draw"}</a>
                     <a href="/gallery">{"Gallery"}</a>
-                    <div style="flex-grow: 1;"></div>
+                    <i style="flex-grow: 1;"></i>
                     {
                         if let Some(p) = player {
-                            html! { &format!("Logged in as {}", p.username) }
+                            html! { <div>{&format!("Logged in as {}", p.username)}</div> }
                         } else {
                             html! { <LoginForm /> }
                         }
@@ -148,20 +140,26 @@ mod components {
                 Callback::from(move |e: Event| {
                     let username = username.clone();
                     username.set(
-                        e.target().unwrap().unchecked_into::<HtmlInputElement>().value()
+                        e.target()
+                            .unwrap()
+                            .unchecked_into::<HtmlInputElement>()
+                            .value(),
                     );
-                }
-            )};
+                })
+            };
             let password = use_state(String::new);
             let onchangep = {
                 let password = password.clone();
                 Callback::from(move |e: Event| {
                     let password = password.clone();
                     password.set(
-                        e.target().unwrap().unchecked_into::<HtmlInputElement>().value()
+                        e.target()
+                            .unwrap()
+                            .unchecked_into::<HtmlInputElement>()
+                            .value(),
                     );
-                }
-            )};
+                })
+            };
             let onsubmit = {
                 let username = username.clone();
                 let password = password.clone();
@@ -171,15 +169,18 @@ mod components {
                     let password = password.clone();
                     spawn_local(async move {
                         Request::post("/api/login")
-                        .json(&LoginPost { username: (*username).clone(), password: (*password).clone() })
-                        .unwrap()
-                        .send()
-                        .await
-                        .unwrap();
+                            .json(&LoginPost {
+                                username: (*username).clone(),
+                                password: (*password).clone(),
+                            })
+                            .unwrap()
+                            .send()
+                            .await
+                            .unwrap();
                     });
                     web_sys::window().unwrap().location().reload().unwrap();
-                } )}
-            ;
+                })
+            };
             html! {
                 <form {onsubmit}>
                     <input type="text" value={(*username).clone()} onchange={onchangeu} />
@@ -189,11 +190,71 @@ mod components {
             }
         }
     }
+    pub mod game {
+        use super::{canvas::Canvas, chat::Chat};
+        use common::{GameInfo, Player};
+        use futures::StreamExt;
+        use gloo_net::websocket::{futures::WebSocket, Message};
+        use stylist::yew::use_style;
+        use wasm_bindgen_futures::spawn_local;
+        use web_sys::console;
+        use yew::prelude::*;
+
+        #[derive(PartialEq, Properties)]
+        pub struct GameProps {}
+
+        #[function_component]
+        pub fn Game(props: &GameProps) -> Html {
+            let GameProps {} = props;
+            let gi = use_state(GameInfo::default);
+            // let prompt = use_state(String::new);
+            let _ = use_effect_with_deps(
+                {
+                    let gi = gi.clone();
+                    // let prompt = prompt.clone();
+                    |_| {
+                        let host = web_sys::window().unwrap().location().host().unwrap();
+                        let ws = WebSocket::open(&format!("ws://{host}/ws/game")).unwrap();
+                        let (mut _write, mut read) = ws.split();
+                        spawn_local(async move {
+                            while let Some(Ok(Message::Text(msg))) = read.next().await {
+                                console::log_1(&format!("Received on game {:?}", msg).into());
+                                let g: GameInfo = serde_json::from_str(&msg).unwrap();
+                                gi.set(g);
+                                // prompt.set(gi.prompt);
+                            }
+                            console::log_1(&"Game WebSocket Closed".into());
+                        });
+                        ()
+                    }
+                },
+                (),
+            );
+            let style = use_style!(
+                r#"
+                display: flex;
+                justify-content: center;
+                gap: 10px;
+            "#
+            );
+            html! {
+                <div class={style}>
+                    <ContextProvider<GameInfo> context={(*gi).clone()}>
+                        <Canvas />
+                        <Chat />
+                    </ContextProvider<GameInfo>>
+                </div>
+            }
+        }
+    }
     pub mod canvas {
         use super::pixel::Pixel;
-        use common::{Color, DrawCanvas, GameState, SetPixelPost};
+        use common::{Color, DrawCanvas, SetPixelPost, GameInfo};
         use futures::StreamExt;
-        use gloo_net::{websocket::{futures::WebSocket, Message}, http::Request};
+        use gloo_net::{
+            http::Request,
+            websocket::{futures::WebSocket, Message},
+        };
         use strum::IntoEnumIterator;
         use stylist::yew::use_style;
         use wasm_bindgen_futures::spawn_local;
@@ -207,14 +268,14 @@ mod components {
             let dc = DrawCanvas::default();
             let grid = use_state_eq(|| dc.grid);
 
-            let prompt = use_state(|| "".to_string());
+            let game_info = use_context::<GameInfo>().unwrap();
+            let prompt = game_info.prompt;
 
             let selected_color = use_state(|| Color::Black);
 
             let _ = use_effect_with_deps(
                 {
                     let grid = grid.clone();
-                    let prompt = prompt.clone();
                     |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
                         let ws = WebSocket::open(&format!("ws://{host}/ws/canvas")).unwrap();
@@ -222,9 +283,8 @@ mod components {
                         spawn_local(async move {
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
                                 console::log_1(&format!("Received on canvas {:?}", msg).into());
-                                let gs: GameState = serde_json::from_str(&msg).unwrap();
-                                grid.set(gs.canvas.grid);
-                                prompt.set(gs.prompt);
+                                let c: DrawCanvas = serde_json::from_str(&msg).unwrap();
+                                grid.set(c.grid);
                             }
                             console::log_1(&"Canvas WebSocket Closed".into());
                         });
@@ -289,7 +349,7 @@ mod components {
             html! {
                 <div class={style}>
                     <div class={classes!("prompt", prompt_style)}>
-                        {prompt.to_ascii_lowercase()}
+                        {prompt.clone()}
                         {if prompt.is_empty() { html! { <></> } } else {
                             html! {
                                 <sub style={"font-family: sans-serif; font-size: 60%; letter-spacing: normal;"}>
@@ -397,13 +457,16 @@ mod components {
     }
     pub mod chat {
         use bounded_vec_deque::BoundedVecDeque;
-        use common::ChatMessage;
+        use common::{ChatMessage, GameInfo};
         use futures::StreamExt;
-        use gloo_net::{http::Request, websocket::{futures::WebSocket, Message}};
+        use gloo_net::{
+            http::Request,
+            websocket::{futures::WebSocket, Message},
+        };
         use stylist::yew::use_style;
         use wasm_bindgen::JsCast;
         use wasm_bindgen_futures::spawn_local;
-        use web_sys::{HtmlInputElement, console, };
+        use web_sys::{console, HtmlInputElement};
         use yew::prelude::*;
         #[derive(PartialEq, Properties)]
         pub struct ChatProps {}
@@ -413,15 +476,20 @@ mod components {
             let messages = use_mut_ref(|| BoundedVecDeque::<ChatMessage>::new(50));
             let messages_update = use_force_update();
             let text = use_state(String::new);
+            let game_info = use_context::<GameInfo>().unwrap();
+            let players = game_info.players;
             let onchange = {
                 let text = text.clone();
                 Callback::from(move |e: Event| {
                     let text = text.clone();
                     text.set(
-                        e.target().unwrap().unchecked_into::<HtmlInputElement>().value()
+                        e.target()
+                            .unwrap()
+                            .unchecked_into::<HtmlInputElement>()
+                            .value(),
                     );
-                }
-                )};
+                })
+            };
             let onsubmit = {
                 let text = text.clone();
                 Callback::from(move |e: SubmitEvent| {
@@ -430,15 +498,18 @@ mod components {
                     if !text.is_empty() {
                         spawn_local(async move {
                             Request::post("/api/chat")
-                            .json(&ChatMessage { username: "".into(), text: (*text).clone() })
-                            .unwrap()
-                            .send()
-                            .await
-                            .unwrap();
+                                .json(&ChatMessage {
+                                    username: "".into(),
+                                    text: (*text).clone(),
+                                })
+                                .unwrap()
+                                .send()
+                                .await
+                                .unwrap();
                         });
                     }
-                } )}
-            ;
+                })
+            };
             let _ = use_effect_with_deps(
                 {
                     let text = text.clone();
@@ -448,7 +519,7 @@ mod components {
                         let ws = WebSocket::open(&format!("ws://{host}/ws/chat")).unwrap();
                         let (mut _write, mut read) = ws.split();
                         spawn_local(async move {
-                        let text = text.clone();
+                            let text = text.clone();
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
                                 console::log_1(&format!("Received on Chat {:?}", msg).into());
                                 let cm: ChatMessage = serde_json::from_str(&msg).unwrap();
@@ -486,11 +557,20 @@ mod components {
                 gap: 3px;
                 width: 100%;
                 overflow-y: auto;
+
+                & > * {
+                    padding: 3px;
+                    border-radius: 3px;
+                    background-color: #00000022;
+                }
+                & > * > b {
+                    font-style: italic;
+                }
             "#
             );
             html! {
                 <div class={style}>
-                    <div>{"Users online:"}</div>
+                    <div>{format!("Users online ({}): {}", players.len(), players.into_iter().map(|p| p.username).collect::<Vec<String>>().join(", "))}</div>
                     <div class={chat_style}>
                         {
                             (*messages)
