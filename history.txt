@@ -1,0 +1,10 @@
+#V2
+HELP
+SELECT * FROM user;
+SELECT * FROM user WHERE username = "A";
+SELECT * FROM user WHERE username = "B";
+SELECT * FROM user WHERE username = "A" AND true;
+SELECT * FROM user WHERE username = "A" AND crypto::scrypt::compare(password, "A");
+SELECT * FROM user WHERE username = "A" AND crypto::scrypt::compare(password, "Aasd");
+SELECT * FROM user WHERE username = "A" AND crypto::scrypt::compare(password, "A") = true;
+SELECT * FROM user WHERE username = "A" AND crypto::scrypt::compare(password, "A");

@@ -177,8 +177,8 @@ mod components {
                             .send()
                             .await
                             .unwrap();
+                        web_sys::window().unwrap().location().reload().unwrap();
                     });
-                    web_sys::window().unwrap().location().reload().unwrap();
                 })
             };
             html! {
@@ -192,7 +192,7 @@ mod components {
     }
     pub mod game {
         use super::{canvas::Canvas, chat::Chat};
-        use common::{GameInfo, Player};
+        use common::GameInfo;
         use futures::StreamExt;
         use gloo_net::websocket::{futures::WebSocket, Message};
         use stylist::yew::use_style;
@@ -249,7 +249,7 @@ mod components {
     }
     pub mod canvas {
         use super::pixel::Pixel;
-        use common::{Color, DrawCanvas, SetPixelPost, GameInfo};
+        use common::{Color, DrawCanvas, GameInfo, SetPixelPost};
         use futures::StreamExt;
         use gloo_net::{
             http::Request,

@@ -13,7 +13,7 @@ common = { path = "../common" }
 serde = "1.0"
 serde_json = "1.0"
 # surrealdb-rs = { git = "https://github.com/surrealdb/surrealdb.rs", version = "0.1.0", features = ["http"] }
-surrealdb = { version = "1.0.0-beta.8", default-features = true, features = ["parallel", "kv-mem", "scripting"] } # sudo apt-get install libclang-dev clang
+surrealdb = { version = "1.0.0-beta.8", default-features = true, features = ["parallel", "kv-mem", "scripting"] } # sudo apt install libclang-dev clang
 tokio = { version = "1.23", features = ["full"] }
 tower = "0.4"
 tower-http = { version = "0.3", features = ["fs"] }

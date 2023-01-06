@@ -5,7 +5,6 @@
 use std::error::Error;
 use std::sync::Arc;
 
-// use anyhow::{anyhow, Result};
 use axum::{
     body::{boxed, Body, BoxBody},
     extract::{Path, State},
@@ -108,6 +107,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .route("/clear_canvas", get(clear_canvas_handler))
                 .route("/chat", post(chat_handler))
                 .route("/player", get(get_player))
+                .route("/register", post(register))
                 .route("/login", post(login))
                 .route(
                     "/logout",
@@ -130,10 +130,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn login(
+async fn register(
     mut session: WritableSession,
+    State(state): State<Arc<AppState>>,
     Json(LoginPost { username, password }): Json<LoginPost>,
 ) -> StatusCode {
+    let x = database::create_user(&state.db, &username, &password)
+        .await
+        .unwrap();
+    println!("{x}");
+    session
+        .insert(
+            "user",
+            Player {
+                username,
+                active: false,
+            },
+        )
+        .expect("Insert fail");
+    StatusCode::OK
+}
+async fn login(
+    mut session: WritableSession,
+    State(state): State<Arc<AppState>>,
+    Json(LoginPost { username, password }): Json<LoginPost>,
+) -> StatusCode {
+    let username = database::auth_user(&state.db, &username, &password)
+        .await
+        .unwrap();
     session
         .insert(
             "user",
@@ -390,16 +414,14 @@ mod database {
 
     use crate::DB;
 
-    pub async fn create_task((ds, ses): &DB, title: &str, priority: i32) -> Result<String> {
-        let sql = "CREATE task CONTENT $data";
-
-        let data: BTreeMap<String, Value> = [
-            ("title".into(), title.into()),
-            ("priority".into(), priority.into()),
+    pub async fn create_user((ds, ses): &DB, username: &str, password: &str) -> Result<String> {
+        let sql =
+            "CREATE user SET username = $username, password = crypto::scrypt::generate($password)";
+        let vars: BTreeMap<String, Value> = [
+            ("username".into(), username.into()),
+            ("password".into(), password.into()),
         ]
         .into();
-        let vars: BTreeMap<String, Value> = [("data".into(), data.into())].into();
-
         let ress = ds.execute(sql, ses, Some(vars), false).await?;
 
         into_iter_objects(ress)?
@@ -409,10 +431,25 @@ mod database {
             .ok_or_else(|| anyhow!("No id returned."))
     }
 
+    pub async fn auth_user((ds, ses): &DB, username: &str, password: &str) -> Result<String> {
+        let sql = "SELECT * FROM user WHERE username = $username AND crypto::scrypt::compare(password, $password)";
+        let vars: BTreeMap<String, Value> = [
+            ("username".into(), username.into()),
+            ("password".into(), password.into()),
+        ]
+        .into();
+        let ress = ds.execute(sql, ses, Some(vars), false).await?;
+
+        into_iter_objects(ress)?
+            .next()
+            .transpose()?
+            .and_then(|obj| obj.get("username").map(|id| id.clone().as_string()))
+            .ok_or_else(|| anyhow!("No id returned."))
+    }
+
     /// Returns Result<impl Iterator<Item = Result<Object>>>
     fn into_iter_objects(ress: Vec<Response>) -> Result<impl Iterator<Item = Result<Object>>> {
         let res = ress.into_iter().next().map(|rp| rp.result).transpose()?;
-
         match res {
             Some(Value::Array(arr)) => {
                 let it = arr.into_iter().map(|v| match v {
