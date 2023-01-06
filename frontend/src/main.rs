@@ -120,12 +120,16 @@ mod components {
                     <i style="flex-grow: 1;"></i>
                     {
                         if let Some(p) = player {
-                            html! { <div>{&format!("Logged in as {}", p.username)}</div> }
+                            html! {
+                                <>
+                                    <div>{&format!("Logged in as {}", p.username)}</div>
+                                    <a href="/api/logout">{"Log out"}</a>
+                                </>
+                            }
                         } else {
                             html! { <LoginForm /> }
                         }
                     }
-                    <a href="/api/logout">{"Log out"}</a>
                 </div>
             }
         }
@@ -207,11 +211,9 @@ mod components {
         pub fn Game(props: &GameProps) -> Html {
             let GameProps {} = props;
             let gi = use_state(GameInfo::default);
-            // let prompt = use_state(String::new);
             let _ = use_effect_with_deps(
                 {
                     let gi = gi.clone();
-                    // let prompt = prompt.clone();
                     |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
                         let ws = WebSocket::open(&format!("ws://{host}/ws/game")).unwrap();
@@ -221,7 +223,6 @@ mod components {
                                 console::log_1(&format!("Received on game {:?}", msg).into());
                                 let g: GameInfo = serde_json::from_str(&msg).unwrap();
                                 gi.set(g);
-                                // prompt.set(gi.prompt);
                             }
                             console::log_1(&"Game WebSocket Closed".into());
                         });
@@ -415,6 +416,16 @@ mod components {
                                 });
                             })
                         }} class="selectColor white">{ "Clear" }</div>
+                        <div onclick={{
+                            Callback::from(move |_| {
+                                spawn_local(async move {
+                                    Request::get("/api/gallery/save")
+                                        .send()
+                                        .await
+                                        .unwrap();
+                                });
+                            })
+                        }} class="selectColor white">{ "Save" }</div>
                     </div>
                 </div>
             }

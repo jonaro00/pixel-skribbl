@@ -3,7 +3,7 @@ use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter};
 
-#[derive(Debug, PartialEq, Clone, Copy, EnumIter, Display, Serialize, Deserialize)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, EnumIter, Serialize, Deserialize)]
 pub enum Color {
     Red,
     Orange,

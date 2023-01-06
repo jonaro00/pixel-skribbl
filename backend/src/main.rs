@@ -1,5 +1,3 @@
-#![allow(unused)] // While exploring, remove for prod.
-
 // SurrealDB start code from https://github.com/jeremychone-channel/rust-surrealdb
 
 use std::error::Error;
@@ -7,7 +5,7 @@ use std::sync::Arc;
 
 use axum::{
     body::{boxed, Body, BoxBody},
-    extract::{Path, State},
+    extract::State,
     http::{Request, Response, StatusCode, Uri},
     response::Redirect,
     routing::{get, post},
@@ -18,7 +16,8 @@ use axum_sessions::{
     extractors::{ReadableSession, WritableSession},
     SessionLayer,
 };
-use common::{ChatMessage, GameState, LoginPost, Player, SetPixelPost, FRUITS};
+use common::{ChatMessage, DrawCanvas, GameState, LoginPost, Player, SetPixelPost};
+use db::DB;
 use surrealdb::{Datastore, Session};
 use tokio::sync::broadcast::channel;
 use tokio::sync::{broadcast::Sender, RwLock};
@@ -26,8 +25,6 @@ use tower::ServiceExt;
 use tower_http::services::ServeDir;
 
 const PORT: u16 = 3000;
-
-pub type DB = (Datastore, Session);
 
 pub struct AppState {
     pub db: DB,
@@ -39,48 +36,20 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let db: DB = (
+    println!("Connecting to database");
+    let database: DB = (
         Datastore::new("file://temp.db").await?,
         Session::for_db("my_ns", "my_db"),
     );
-    let (ds, ses) = &db;
 
-    // --- Create
-    // let t1 = database::create_task(&db, "Task 01", 10).await?;
-    // let t2 = database::create_task(&db, "Task 02", 7).await?;
-
-    // // --- Merge
-    // let sql = "UPDATE $th MERGE $data RETURN id";
-    // let data: BTreeMap<String, Value> = [
-    //     ("title".into(), "Task 02 UPDATED".into()),
-    //     ("done".into(), true.into()),
-    // ]
-    // .into();
-    // let vars: BTreeMap<String, Value> = [
-    //     ("th".into(), thing(&t2)?.into()),
-    //     ("data".into(), data.into()),
-    // ]
-    // .into();
-    // ds.execute(sql, ses, Some(vars), true).await?;
-
-    // // --- Delete
-    // let sql = "DELETE $th";
-    // let vars: BTreeMap<String, Value> = [("th".into(), thing(&t1)?.into())].into();
-    // ds.execute(sql, ses, Some(vars), true).await?;
-
-    // // --- Select
-    // let sql = "SELECT * from task";
-    // let ress = ds.execute(sql, ses, None, false).await?;
-    // for object in into_iter_objects(ress)? {
-    //     println!("record {}", object?);
-    // }
-
+    // Cookie sessions
     let store = MemoryStore::new();
     let secret = include_bytes!("../../secret"); // MUST be at least 64 bytes!
     let session_layer = SessionLayer::new(store, secret);
 
+    // Connections, state, and channels for the app
     let state = Arc::new(AppState {
-        db,
+        db: database,
         game_state: RwLock::new(GameState::new()),
         game_channel: channel(128).0,
         canvas_channel: channel(128).0,
@@ -115,6 +84,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         s.destroy();
                         Redirect::temporary("/")
                     }),
+                )
+                .nest(
+                    "/gallery",
+                    Router::new()
+                        .route("/save", get(gallery_save_handler))
+                        .route("/canvasses", get(gallery_canvasses_handler)),
                 ),
         )
         .route("/*file", get(get_static_file))
@@ -122,8 +97,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .layer(session_layer)
         .with_state(state);
 
-    println!("Listening on port {PORT}");
-    axum::Server::bind(&format!("0.0.0.0:{PORT}").parse()?)
+    let addr = format!("0.0.0.0:{PORT}").parse()?;
+    println!("Listening on {addr}");
+    axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await?;
 
@@ -135,7 +111,7 @@ async fn register(
     State(state): State<Arc<AppState>>,
     Json(LoginPost { username, password }): Json<LoginPost>,
 ) -> StatusCode {
-    let x = database::create_user(&state.db, &username, &password)
+    let x = db::create_user(&state.db, &username, &password)
         .await
         .unwrap();
     println!("{x}");
@@ -155,7 +131,7 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(LoginPost { username, password }): Json<LoginPost>,
 ) -> StatusCode {
-    let username = database::auth_user(&state.db, &username, &password)
+    let username = db::auth_user(&state.db, &username, &password)
         .await
         .unwrap();
     session
@@ -168,6 +144,35 @@ async fn login(
         )
         .expect("Insert fail");
     StatusCode::OK
+}
+async fn gallery_save_handler(
+    session: ReadableSession,
+    State(state): State<Arc<AppState>>,
+) -> StatusCode {
+    match verify_session(&session).await {
+        StatusCode::UNAUTHORIZED => return StatusCode::UNAUTHORIZED,
+        _ => (),
+    };
+    let player = session.get::<Player>("user").unwrap();
+    let gs = { (*state.game_state.read().await).clone() };
+    db::save_canvas(&state.db, &player.username, &gs.canvas)
+        .await
+        .unwrap();
+    StatusCode::OK
+}
+async fn gallery_canvasses_handler(
+    session: ReadableSession,
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<DrawCanvas>> {
+    match verify_session(&session).await {
+        StatusCode::UNAUTHORIZED => return Json(vec![]),
+        _ => (),
+    };
+    let player = session.get::<Player>("user").unwrap();
+    let v = db::get_canvasses(&state.db, &player.username)
+        .await
+        .unwrap();
+    Json(v)
 }
 
 async fn get_player(session: ReadableSession) -> Json<Option<Player>> {
@@ -269,18 +274,14 @@ mod ws {
     use std::sync::Arc;
 
     use axum::{
-        extract::{
-            ws::{Message, WebSocket, WebSocketUpgrade},
-            State,
-        },
-        response::{IntoResponse, Response},
+        extract::ws::{Message, WebSocket, WebSocketUpgrade},
+        response::Response,
         Extension,
     };
     use axum_sessions::extractors::ReadableSession;
     use common::{ChatMessage, GameInfo, Player};
-    use tokio::sync::RwLock;
 
-    use crate::{AppState, GameState};
+    use crate::AppState;
 
     pub enum WsStreamType {
         Game,
@@ -319,7 +320,7 @@ mod ws {
             WsStreamType::Canvas => {
                 let mut rx = state.canvas_channel.subscribe();
                 loop {
-                    let mut gs = { (*state.game_state.read().await).clone() };
+                    let gs = { (*state.game_state.read().await).clone() };
                     if socket
                         .send(Message::from(serde_json::to_string(&gs.canvas).unwrap()))
                         .await
@@ -386,7 +387,6 @@ mod ws {
                     }
                 }
             }
-            _ => (),
         };
     }
 }
@@ -404,19 +404,20 @@ async fn get_static_file(uri: Uri) -> Result<Response<BoxBody>, (StatusCode, Str
     }
 }
 
-mod database {
+mod db {
     use anyhow::{anyhow, Result};
+    use common::DrawCanvas;
     use std::collections::BTreeMap;
     use surrealdb::{
-        sql::{thing, Datetime, Object, Thing, Value},
+        sql::{thing, Object, Value},
         Datastore, Response, Session,
     };
 
-    use crate::DB;
+    pub type DB = (Datastore, Session);
 
     pub async fn create_user((ds, ses): &DB, username: &str, password: &str) -> Result<String> {
         let sql =
-            "CREATE user SET username = $username, password = crypto::scrypt::generate($password)";
+            "CREATE user:$username SET username = $username, password = crypto::scrypt::generate($password)";
         let vars: BTreeMap<String, Value> = [
             ("username".into(), username.into()),
             ("password".into(), password.into()),
@@ -447,7 +448,45 @@ mod database {
             .ok_or_else(|| anyhow!("No id returned."))
     }
 
-    /// Returns Result<impl Iterator<Item = Result<Object>>>
+    pub async fn save_canvas((ds, ses): &DB, username: &str, canvas: &DrawCanvas) -> Result<()> {
+        let sql = "CREATE canvas SET data = $data";
+        let vars: BTreeMap<String, Value> =
+            [("data".into(), serde_json::to_string(canvas)?.into())].into();
+        let ress = ds.execute(sql, ses, Some(vars), false).await?;
+        let id = into_iter_objects(ress)?
+            .next()
+            .transpose()?
+            .and_then(|obj| obj.get("id").map(|id| id.clone().as_string()))
+            .ok_or_else(|| anyhow!("No id returned."))?;
+        let sql = "UPDATE user SET canvasses += $canvas_id WHERE username = $username";
+        let vars: BTreeMap<String, Value> = [
+            ("canvas_id".into(), thing(&id)?.into()),
+            ("username".into(), username.into()),
+        ]
+        .into();
+        let _ = ds.execute(sql, ses, Some(vars), false).await?;
+        Ok(())
+    }
+
+    pub async fn get_canvasses((ds, ses): &DB, username: &str) -> Result<Vec<DrawCanvas>> {
+        let sql = "SELECT canvasses FROM user WHERE username = $username FETCH canvasses";
+        let vars: BTreeMap<String, Value> = [("username".into(), username.into())].into();
+        let ress = ds.execute(sql, ses, Some(vars), false).await?;
+        println!("{:?}", ress);
+        let x = into_iter_objects(ress)?
+            .next()
+            .transpose()?
+            .and_then(|obj| obj.get("canvasses").map(|c| match c {
+                Value::Array(vec) => vec.iter().map(|cv| match cv {
+                    Value::Object(o) => serde_json::from_str::<DrawCanvas>(&o.get("data").unwrap().clone().as_string()).map_err(|_| anyhow!("u suck")),
+                    _ => Err(anyhow!("xdd")),
+                }).collect(),
+                _ => vec![],
+            }))
+            .ok_or(anyhow!("xdd"))?.into_iter().map(|r| r.unwrap()).collect();
+        Ok(x)
+    }
+
     fn into_iter_objects(ress: Vec<Response>) -> Result<impl Iterator<Item = Result<Object>>> {
         let res = ress.into_iter().next().map(|rp| rp.result).transpose()?;
         match res {
