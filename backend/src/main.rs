@@ -18,6 +18,7 @@ use axum_sessions::{
 };
 use common::{ChatMessage, DrawCanvas, GameState, LoginPost, Player, SetPixelPost};
 use db::DB;
+use rand::Rng;
 use surrealdb::{Datastore, Session};
 use tokio::sync::broadcast::channel;
 use tokio::sync::{broadcast::Sender, RwLock};
@@ -44,8 +45,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Cookie sessions
     let store = MemoryStore::new();
-    let secret = include_bytes!("../../secret"); // MUST be at least 64 bytes!
-    let session_layer = SessionLayer::new(store, secret);
+    let mut arr2 = [0u8; 128];
+    rand::thread_rng().fill(&mut arr2);
+    let session_layer = SessionLayer::new(store, &arr2);
 
     // Connections, state, and channels for the app
     let state = Arc::new(AppState {
@@ -114,7 +116,7 @@ async fn register(
     let x = db::create_user(&state.db, &username, &password)
         .await
         .unwrap();
-    println!("{x}");
+    println!("User registered: {x}");
     session
         .insert(
             "user",
@@ -472,18 +474,32 @@ mod db {
         let sql = "SELECT canvasses FROM user WHERE username = $username FETCH canvasses";
         let vars: BTreeMap<String, Value> = [("username".into(), username.into())].into();
         let ress = ds.execute(sql, ses, Some(vars), false).await?;
-        println!("{:?}", ress);
         let x = into_iter_objects(ress)?
             .next()
             .transpose()?
-            .and_then(|obj| obj.get("canvasses").map(|c| match c {
-                Value::Array(vec) => vec.iter().map(|cv| match cv {
-                    Value::Object(o) => serde_json::from_str::<DrawCanvas>(&o.get("data").unwrap().clone().as_string()).map_err(|_| anyhow!("u suck")),
-                    _ => Err(anyhow!("xdd")),
-                }).collect(),
-                _ => vec![],
-            }))
-            .ok_or(anyhow!("xdd"))?.into_iter().map(|r| r.unwrap()).collect();
+            .and_then(|obj| {
+                obj.get("canvasses").map(|c| match c {
+                    Value::Array(vec) => vec
+                        .iter()
+                        .filter(|cv| match cv {
+                            Value::Object(_) => true,
+                            _ => false,
+                        })
+                        .map(|cv| match cv {
+                            Value::Object(o) => serde_json::from_str::<DrawCanvas>(
+                                &o.get("data").unwrap().clone().as_string(),
+                            )
+                            .map_err(|_| anyhow!("u suck")),
+                            _ => Err(anyhow!("xdd")),
+                        })
+                        .collect(),
+                    _ => vec![],
+                })
+            })
+            .ok_or(anyhow!("xdd"))?
+            .into_iter()
+            .map(|r| r.unwrap())
+            .collect();
         Ok(x)
     }
 

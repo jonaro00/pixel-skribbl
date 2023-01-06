@@ -1,4 +1,4 @@
-use components::{game::Game, navbar::NavBar};
+use components::{gallery::Gallery, game::Game, navbar::NavBar};
 use gloo_net::http::Request;
 use stylist::{
     css,
@@ -6,8 +6,20 @@ use stylist::{
 };
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
+use yew_router::prelude::*;
 
 use common::Player;
+
+#[derive(Clone, Routable, PartialEq)]
+enum Route {
+    #[at("/")]
+    Home,
+    #[at("/gallery")]
+    Gallery,
+    #[not_found]
+    #[at("/404")]
+    NotFound,
+}
 
 #[function_component(App)]
 fn app() -> Html {
@@ -66,10 +78,16 @@ fn app() -> Html {
         <>
             <Global css={glob_style}/>
             <ContextProvider<Option<Player>> context={(*player).clone()}>
-                <div class={wrapper_style}>
-                    <NavBar />
-                    <Game />
-                </div>
+                <BrowserRouter>
+                    <div class={wrapper_style}>
+                        <NavBar />
+                        <Switch<Route> render={|r| match r {
+                            Route::Home => html! { <Game /> },
+                            Route::Gallery => html! { <Gallery /> },
+                            Route::NotFound => html! { "Not found 🤔" },
+                        }} />
+                    </div>
+                </BrowserRouter>
             </ContextProvider<Option<Player>>>
         </>
     }
@@ -88,9 +106,12 @@ mod components {
         use wasm_bindgen_futures::spawn_local;
         use web_sys::HtmlInputElement;
         use yew::prelude::*;
+        use yew_router::prelude::*;
+
+        use crate::Route;
+
         #[derive(PartialEq, Properties)]
         pub struct NavBarProps {}
-
         #[function_component]
         pub fn NavBar(props: &NavBarProps) -> Html {
             let NavBarProps {} = props;
@@ -115,8 +136,10 @@ mod components {
             );
             html! {
                 <div class={style}>
-                    <a href="/">{"Draw"}</a>
-                    <a href="/gallery">{"Gallery"}</a>
+                    // <a href="/">{"Draw"}</a>
+                    // <a href="/gallery">{"Gallery"}</a>
+                    <Link<Route> to={Route::Home}>{ "Draw" }</Link<Route>>
+                    <Link<Route> to={Route::Gallery}>{ "Gallery" }</Link<Route>>
                     <i style="flex-grow: 1;"></i>
                     {
                         if let Some(p) = player {
@@ -318,6 +341,11 @@ mod components {
                 grid-template-columns: repeat(${width}, 1fr);
                 grid-template-rows: repeat(${height}, 1fr);
                 user-select: none;
+
+                & > * {
+                    width: 40px;
+                    height: 40px;
+                }
             "#,
                 width = *width,
                 height = *height,
@@ -368,7 +396,6 @@ mod components {
                                 .map(|x| {
                                     let pos = y * *height + x;
                                     let onclick = {
-                                        // let grid = grid.clone();
                                         let selected_color = selected_color.clone();
                                         Callback::from(move |_| {
                                             let selected_color = selected_color.clone();
@@ -451,9 +478,9 @@ mod components {
 
             let style = use_style!(
                 r#"
-                width: 40px;
-                height: 40px;
-                border: 1px solid #00000022;
+                min-width: 10px;
+                min-height: 10px;
+                border: .5px solid #00000022;
                 cursor: crosshair;
             "#
             );
@@ -529,7 +556,7 @@ mod components {
                         let host = web_sys::window().unwrap().location().host().unwrap();
                         let ws = WebSocket::open(&format!("ws://{host}/ws/chat")).unwrap();
                         let (mut _write, mut read) = ws.split();
-                        spawn_local(async move {
+                        let f = async move {
                             let text = text.clone();
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
                                 console::log_1(&format!("Received on Chat {:?}", msg).into());
@@ -539,7 +566,8 @@ mod components {
                                 text.set(String::new());
                             }
                             console::log_1(&"Chat WebSocket Closed".into());
-                        });
+                        };
+                        spawn_local(f);
                         ()
                     }
                 },
@@ -602,6 +630,90 @@ mod components {
                         </form>
                     </div>
                 </div>
+            }
+        }
+    }
+    pub mod gallery {
+        use common::{Color, DrawCanvas};
+        use gloo_net::{
+            http::Request,
+            websocket::{futures::WebSocket, Message},
+        };
+        use stylist::yew::use_style;
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen_futures::spawn_local;
+        use web_sys::{console, HtmlInputElement};
+        use yew::prelude::*;
+
+        use super::pixel::Pixel;
+
+        #[derive(PartialEq, Properties)]
+        pub struct GalleryProps {}
+        #[function_component]
+        pub fn Gallery(props: &GalleryProps) -> Html {
+            let GalleryProps {} = props;
+            let canvasses = use_state(|| vec![] as Vec<DrawCanvas>);
+            let _ = use_effect_with_deps(
+                {
+                    let canvasses = canvasses.clone();
+                    |_| {
+                        spawn_local(async move {
+                            let p = Request::get("/api/gallery/canvasses")
+                                .send()
+                                .await
+                                .unwrap()
+                                .json()
+                                .await
+                                .unwrap();
+                            canvasses.set(p);
+                        });
+                    }
+                },
+                (),
+            );
+            let style = use_style!(
+                r#"
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 10px;
+                "#
+            );
+            let canvas_style = use_style!(
+                r#"
+                display: grid;
+                grid-template-columns: repeat(${width}, 1fr);
+                grid-template-rows: repeat(${height}, 1fr);
+                user-select: none;
+            "#,
+                width = 12,
+                height = 12,
+            );
+            html! {
+                <div class={style}>{
+                    canvasses.iter().map(|c| {
+                        let width = c.width;
+                        let height = c.height;
+                        let grid = c.grid.clone();
+                        let s = canvas_style.clone();
+                        html! {
+                            <div class={s}>{
+                                (0..height)
+                                    .map(|y| {
+                                        (0..width)
+                                            .map(|x| {
+                                                let pos = y * height + x;
+                                                html! {
+                                                    <Pixel key={pos} color={grid[pos]} onclick={|_| {}} />
+                                                }
+                                            })
+                                            .collect::<Html>()
+                                    })
+                                    .collect::<Html>()
+                            }</div>
+                        }
+                    }).collect::<Html>()
+                }</div>
             }
         }
     }
