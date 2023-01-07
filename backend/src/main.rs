@@ -35,8 +35,7 @@ pub struct AppState {
     pub chat_channel: Sender<ChatMessage>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+pub async fn build_app() -> Result<Router, Box<dyn Error>> {
     println!("Connecting to database");
     let database: DB = (
         Datastore::new("file://temp.db").await?,
@@ -98,6 +97,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/", get(get_static_file))
         .layer(session_layer)
         .with_state(state);
+    Ok(app)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let app = build_app().await?;
 
     let addr = format!("0.0.0.0:{PORT}").parse()?;
     println!("Listening on {addr}");

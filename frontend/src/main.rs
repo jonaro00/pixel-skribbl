@@ -634,15 +634,10 @@ mod components {
         }
     }
     pub mod gallery {
-        use common::{Color, DrawCanvas};
-        use gloo_net::{
-            http::Request,
-            websocket::{futures::WebSocket, Message},
-        };
+        use common::DrawCanvas;
+        use gloo_net::http::Request;
         use stylist::yew::use_style;
-        use wasm_bindgen::JsCast;
         use wasm_bindgen_futures::spawn_local;
-        use web_sys::{console, HtmlInputElement};
         use yew::prelude::*;
 
         use super::pixel::Pixel;
