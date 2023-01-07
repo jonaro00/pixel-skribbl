@@ -1,16 +1,14 @@
-// SurrealDB start code from https://github.com/jeremychone-channel/rust-surrealdb
-
 use std::error::Error;
 use std::sync::Arc;
 
 use axum::{
-    body::{boxed, Body, BoxBody},
     extract::State,
-    http::{Request, Response, StatusCode, Uri},
+    http::StatusCode,
     response::Redirect,
     routing::{get, post},
     Extension, Json, Router,
 };
+use axum_extra::routing::SpaRouter;
 use axum_sessions::{
     async_session::MemoryStore,
     extractors::{ReadableSession, WritableSession},
@@ -20,10 +18,10 @@ use common::{ChatMessage, DrawCanvas, GameState, LoginPost, Player, SetPixelPost
 use db::DB;
 use rand::Rng;
 use surrealdb::{Datastore, Session};
-use tokio::sync::broadcast::channel;
-use tokio::sync::{broadcast::Sender, RwLock};
-use tower::ServiceExt;
-use tower_http::services::ServeDir;
+use tokio::sync::{
+    broadcast::{channel, Sender},
+    RwLock,
+};
 
 const PORT: u16 = 3000;
 
@@ -93,8 +91,7 @@ pub async fn build_app() -> Result<Router, Box<dyn Error>> {
                         .route("/canvasses", get(gallery_canvasses_handler)),
                 ),
         )
-        .route("/*file", get(get_static_file))
-        .route("/", get(get_static_file))
+        .merge(SpaRouter::new("/assets", "frontend/dist").index_file("index.html"))
         .layer(session_layer)
         .with_state(state);
     Ok(app)
@@ -398,20 +395,8 @@ mod ws {
     }
 }
 
-async fn get_static_file(uri: Uri) -> Result<Response<BoxBody>, (StatusCode, String)> {
-    let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
-
-    // `ServeDir` implements `tower::Service` so we can call it with `tower::ServiceExt::oneshot`
-    match ServeDir::new("./frontend/dist").oneshot(req).await {
-        Ok(res) => Ok(res.map(boxed)),
-        Err(err) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Something went wrong: {}", err),
-        )),
-    }
-}
-
 mod db {
+    // SurrealDB start code from https://github.com/jeremychone-channel/rust-surrealdb
     use anyhow::{anyhow, Result};
     use common::DrawCanvas;
     use std::collections::BTreeMap;

@@ -11,6 +11,7 @@ path = "src/shuttle.rs"
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.6", features = ["ws"] }
+axum-extra = { version = "0.4", features = ["spa"] }
 axum-sessions = "0.4"
 common = { path = "../common" }
 rand = "0.8"
@@ -20,5 +21,3 @@ shuttle-service = { version = "0.8.0", features = ["web-axum"] }
 surrealdb = { version = "1.0.0-beta.8", default-features = true, features = ["parallel", "kv-mem", "scripting"] } # sudo apt install libclang-dev clang
 sync_wrapper = "0.1"
 tokio = { version = "1", features = ["full"] }
-tower = "0.4"
-tower-http = { version = "0.3", features = ["fs"] }

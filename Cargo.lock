@@ -412,6 +412,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "axum-extra",
  "axum-sessions",
  "common",
  "rand 0.8.5",
@@ -421,8 +422,6 @@ dependencies = [
  "surrealdb",
  "sync_wrapper",
  "tokio",
- "tower",
- "tower-http",
 ]
 
 [[package]]

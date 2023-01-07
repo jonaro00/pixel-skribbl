@@ -10,6 +10,10 @@ use yew_router::prelude::*;
 
 use common::Player;
 
+fn main() {
+    yew::Renderer::<App>::new().render();
+}
+
 #[derive(Clone, Routable, PartialEq)]
 enum Route {
     #[at("/")]
@@ -91,10 +95,6 @@ fn app() -> Html {
             </ContextProvider<Option<Player>>>
         </>
     }
-}
-
-fn main() {
-    yew::Renderer::<App>::new().render();
 }
 
 mod components {
@@ -575,11 +575,11 @@ mod components {
             );
             let style = use_style!(
                 r#"
+                flex: 0 0 245px;
                 display: flex;
                 flex-direction: column;
                 gap: 10px;
-                max-width: 245px;
-                max-height: 596px;
+                max-height: 651px;
                 background-color: #6e7eef5e;
                 padding: 10px;
                 border-radius: 10px;
