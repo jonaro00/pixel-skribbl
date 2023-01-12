@@ -18,7 +18,3 @@ ws = true
 [[proxy]]
 backend = "ws://localhost:3000/ws/chat"
 ws = true
-
-[[hooks]]
-stage = "pre_build"
-command = "clear"

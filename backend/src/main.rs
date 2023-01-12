@@ -89,6 +89,7 @@ pub async fn build_app() -> Result<Router, Box<dyn Error>> {
                         .route("/canvasses", get(gallery_canvasses_handler)),
                 ),
         )
+        .route("/favicon.ico", get(|| async move { StatusCode::NOT_FOUND }))
         .merge(SpaRouter::new("/assets", "frontend/dist").index_file("index.html"))
         .layer(session_layer)
         .with_state(state);
