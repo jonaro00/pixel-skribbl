@@ -556,13 +556,13 @@ mod components {
                                 .send()
                                 .await
                                 .unwrap();
+                            text.set(String::new());
                         });
                     }
                 })
             };
             let _ = use_effect_with_deps(
                 {
-                    let text = text.clone();
                     let messages = messages.clone();
                     |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
@@ -575,13 +575,11 @@ mod components {
                         .unwrap();
                         let (mut _write, mut read) = ws.split();
                         let f = async move {
-                            let text = text.clone();
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
                                 console::log_1(&format!("Received on Chat {:?}", msg).into());
                                 let cm: ChatMessage = serde_json::from_str(&msg).unwrap();
                                 (*messages).borrow_mut().push_back(cm);
                                 messages_update.force_update();
-                                text.set(String::new());
                             }
                             console::log_1(&"Chat WebSocket Closed".into());
                         };
@@ -627,7 +625,18 @@ mod components {
             );
             html! {
                 <div class={style}>
-                    <div>{format!("Users online ({}): {}", players.len(), players.into_iter().map(|p| p.username).collect::<Vec<String>>().join(", "))}</div>
+                    <div>
+                        {
+                            format!(
+                                "Users online ({}): {}",
+                                players.len(),
+                                players
+                                    .into_iter()
+                                    .map(|p| if p.active { format!("{} (drawing)", p.username) } else { p.username })
+                                    .collect::<Vec<String>>()
+                                    .join(", "))
+                        }
+                    </div>
                     <div class={chat_style}>
                         {
                             (*messages)
