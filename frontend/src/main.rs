@@ -239,7 +239,13 @@ mod components {
                     let gi = gi.clone();
                     |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
-                        let ws = WebSocket::open(&format!("ws://{host}/ws/game")).unwrap();
+                        let secure =
+                            web_sys::window().unwrap().location().protocol().unwrap() == "https:";
+                        let ws = WebSocket::open(&format!(
+                            "ws{}://{host}/ws/game",
+                            if secure { "s" } else { "" }
+                        ))
+                        .unwrap();
                         let (mut _write, mut read) = ws.split();
                         spawn_local(async move {
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
@@ -302,7 +308,13 @@ mod components {
                     let grid = grid.clone();
                     |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
-                        let ws = WebSocket::open(&format!("ws://{host}/ws/canvas")).unwrap();
+                        let secure =
+                            web_sys::window().unwrap().location().protocol().unwrap() == "https:";
+                        let ws = WebSocket::open(&format!(
+                            "ws{}://{host}/ws/canvas",
+                            if secure { "s" } else { "" }
+                        ))
+                        .unwrap();
                         let (mut _write, mut read) = ws.split();
                         spawn_local(async move {
                             while let Some(Ok(Message::Text(msg))) = read.next().await {
@@ -554,7 +566,13 @@ mod components {
                     let messages = messages.clone();
                     |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
-                        let ws = WebSocket::open(&format!("ws://{host}/ws/chat")).unwrap();
+                        let secure =
+                            web_sys::window().unwrap().location().protocol().unwrap() == "https:";
+                        let ws = WebSocket::open(&format!(
+                            "ws{}://{host}/ws/chat",
+                            if secure { "s" } else { "" }
+                        ))
+                        .unwrap();
                         let (mut _write, mut read) = ws.split();
                         let f = async move {
                             let text = text.clone();

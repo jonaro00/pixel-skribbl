@@ -23,8 +23,6 @@ use tokio::sync::{
     RwLock,
 };
 
-const PORT: u16 = 3000;
-
 pub struct AppState {
     pub db: DB,
     pub game_state: RwLock<GameState>,
@@ -99,9 +97,14 @@ pub async fn build_app() -> Result<Router, Box<dyn Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let port: u16 = std::env::var("PORT")
+        .unwrap_or("3000".into())
+        .parse()
+        .expect("Invalid PORT variable");
+
     let app = build_app().await?;
 
-    let addr = format!("0.0.0.0:{PORT}").parse()?;
+    let addr = format!("0.0.0.0:{port}").parse()?;
     println!("Listening on {addr}");
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
@@ -409,7 +412,7 @@ mod db {
 
     pub async fn create_user((ds, ses): &DB, username: &str, password: &str) -> Result<String> {
         let sql =
-            "CREATE user:$username SET username = $username, password = crypto::scrypt::generate($password)";
+            "CREATE user SET username = $username, password = crypto::scrypt::generate($password)";
         let vars: BTreeMap<String, Value> = [
             ("username".into(), username.into()),
             ("password".into(), password.into()),
