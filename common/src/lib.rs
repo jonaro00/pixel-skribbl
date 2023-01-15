@@ -98,6 +98,12 @@ impl GameState {
         self.players[i].active = true;
     }
 }
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GameInfo {
     pub prompt: String,
@@ -118,9 +124,6 @@ pub struct Player {
 impl PartialEq for Player {
     fn eq(&self, other: &Self) -> bool {
         self.username == other.username
-    }
-    fn ne(&self, other: &Self) -> bool {
-        self.username != other.username
     }
 }
 

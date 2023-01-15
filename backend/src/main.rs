@@ -99,7 +99,7 @@ pub async fn build_app() -> Result<Router, Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let port: u16 = std::env::var("PORT")
-        .unwrap_or("3000".into())
+        .unwrap_or_else(|_| "3000".into())
         .parse()
         .expect("Invalid PORT variable");
 
@@ -157,10 +157,9 @@ async fn gallery_save_handler(
     session: ReadableSession,
     State(state): State<Arc<AppState>>,
 ) -> StatusCode {
-    match verify_session(&session).await {
-        StatusCode::UNAUTHORIZED => return StatusCode::UNAUTHORIZED,
-        _ => (),
-    };
+    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
+        return StatusCode::UNAUTHORIZED;
+    }
     let player = session.get::<Player>("user").unwrap();
     let gs = { (*state.game_state.read().await).clone() };
     db::save_canvas(&state.db, &player.username, &gs.canvas)
@@ -172,10 +171,9 @@ async fn gallery_canvasses_handler(
     session: ReadableSession,
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<DrawCanvas>> {
-    match verify_session(&session).await {
-        StatusCode::UNAUTHORIZED => return Json(vec![]),
-        _ => (),
-    };
+    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
+        return Json(vec![]);
+    }
     let player = session.get::<Player>("user").unwrap();
     let v = db::get_canvasses(&state.db, &player.username)
         .await
@@ -199,13 +197,12 @@ async fn set_pixel_handler(
     State(state): State<Arc<AppState>>,
     Json(SetPixelPost { pixel_id, color }): Json<SetPixelPost>,
 ) -> StatusCode {
-    match verify_session(&session).await {
-        StatusCode::UNAUTHORIZED => return StatusCode::UNAUTHORIZED,
-        _ => (),
-    };
+    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
+        return StatusCode::UNAUTHORIZED;
+    }
     {
         let mut gs = state.game_state.write().await;
-        (*gs).canvas.set_pixel(pixel_id, color);
+        gs.canvas.set_pixel(pixel_id, color);
     }
     if state.canvas_channel.send(true).is_err() {
         println!("No receivers");
@@ -216,13 +213,12 @@ async fn clear_canvas_handler(
     session: ReadableSession,
     State(state): State<Arc<AppState>>,
 ) -> StatusCode {
-    match verify_session(&session).await {
-        StatusCode::UNAUTHORIZED => return StatusCode::UNAUTHORIZED,
-        _ => (),
-    };
+    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
+        return StatusCode::UNAUTHORIZED;
+    }
     {
         let mut gs = state.game_state.write().await;
-        (*gs).canvas.clear();
+        gs.canvas.clear();
     }
     if state.canvas_channel.send(true).is_err() {
         println!("No receivers");
@@ -234,16 +230,15 @@ async fn chat_handler(
     State(state): State<Arc<AppState>>,
     Json(chat_message): Json<ChatMessage>,
 ) -> StatusCode {
-    match verify_session(&session).await {
-        StatusCode::UNAUTHORIZED => return StatusCode::UNAUTHORIZED,
-        _ => (),
-    };
+    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
+        return StatusCode::UNAUTHORIZED;
+    }
     let player = session.get::<Player>("user").unwrap();
     let username = player.username;
     let text = chat_message.text;
     let correct = {
         let gs = state.game_state.read().await;
-        text.trim().to_lowercase() == (*gs).prompt
+        text.trim().to_lowercase() == gs.prompt
     };
     if state
         .chat_channel
@@ -475,10 +470,7 @@ mod db {
                 obj.get("canvasses").map(|c| match c {
                     Value::Array(vec) => vec
                         .iter()
-                        .filter(|cv| match cv {
-                            Value::Object(_) => true,
-                            _ => false,
-                        })
+                        .filter(|cv| matches!(cv, Value::Object(_)))
                         .map(|cv| match cv {
                             Value::Object(o) => serde_json::from_str::<DrawCanvas>(
                                 &o.get("data").unwrap().clone().as_string(),
@@ -490,7 +482,7 @@ mod db {
                     _ => vec![],
                 })
             })
-            .ok_or(anyhow!("xdd"))?
+            .ok_or_else(|| anyhow!("xdd"))?
             .into_iter()
             .map(|r| r.unwrap())
             .collect();

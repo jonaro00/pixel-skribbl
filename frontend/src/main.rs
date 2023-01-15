@@ -60,7 +60,7 @@ fn app() -> Html {
     "#
     );
     let player = use_state(|| None as Option<Player>);
-    let _ = use_effect_with_deps(
+    use_effect_with_deps(
         {
             let player = player.clone();
             |_| {
@@ -234,7 +234,7 @@ mod components {
         pub fn Game(props: &GameProps) -> Html {
             let GameProps {} = props;
             let gi = use_state(GameInfo::default);
-            let _ = use_effect_with_deps(
+            use_effect_with_deps(
                 {
                     let gi = gi.clone();
                     |_| {
@@ -307,7 +307,7 @@ mod components {
 
             let selected_color = use_state(|| Color::Black);
 
-            let _ = use_effect_with_deps(
+            use_effect_with_deps(
                 {
                     let grid = grid.clone();
                     |_| {
@@ -563,7 +563,7 @@ mod components {
                     }
                 })
             };
-            let _ = use_effect_with_deps(
+            use_effect_with_deps(
                 {
                     let messages = messages.clone();
                     |_| {
@@ -677,7 +677,7 @@ mod components {
         pub fn Gallery(props: &GalleryProps) -> Html {
             let GalleryProps {} = props;
             let canvasses = use_state(|| vec![] as Vec<DrawCanvas>);
-            let _ = use_effect_with_deps(
+            use_effect_with_deps(
                 {
                     let canvasses = canvasses.clone();
                     |_| {
