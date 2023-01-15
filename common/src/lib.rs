@@ -65,7 +65,7 @@ impl GameState {
     fn random_prompt(not: Option<&str>) -> String {
         let mut rng: StdRng = SeedableRng::from_entropy();
         loop {
-            let p = FRUITS[rng.gen_range(0..FRUITS.len())].to_ascii_lowercase();
+            let p = FRUITS[rng.gen_range(0..FRUITS.len())].to_lowercase();
             match not {
                 Some(prev) => {
                     if p != prev {

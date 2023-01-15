@@ -243,7 +243,7 @@ async fn chat_handler(
     let text = chat_message.text;
     let correct = {
         let gs = state.game_state.read().await;
-        text.trim() == &(*gs).prompt
+        text.trim().to_lowercase() == (*gs).prompt
     };
     if state
         .chat_channel

@@ -55,7 +55,7 @@ fn app() -> Html {
         display: flex;
         flex-direction: column;
         gap: 10px;
-        max-width: 1000px;
+        max-width: 1100px;
         margin: auto;
     "#
     );
@@ -265,6 +265,10 @@ mod components {
                 display: flex;
                 justify-content: center;
                 gap: 10px;
+
+                @media screen and (max-width: 780px) {
+                    flex-wrap: wrap;
+                }
             "#
             );
             html! {
@@ -353,11 +357,9 @@ mod components {
                 grid-template-columns: repeat(${width}, 1fr);
                 grid-template-rows: repeat(${height}, 1fr);
                 user-select: none;
-
-                & > * {
-                    width: 40px;
-                    height: 40px;
-                }
+                width: 100%;
+                max-width: 480px;
+                aspect-ratio: 1;
             "#,
                 width = *width,
                 height = *height,
