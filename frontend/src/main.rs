@@ -1,4 +1,7 @@
-use components::{gallery::Gallery, game::Game, navbar::NavBar};
+use components::{
+    game::Game,
+    navbar::{LoginForm, NavBar},
+};
 use gloo_net::http::Request;
 use stylist::{
     css,
@@ -18,8 +21,8 @@ fn main() {
 enum Route {
     #[at("/")]
     Home,
-    #[at("/gallery")]
-    Gallery,
+    #[at("/game/:room_id")]
+    Game { room_id: u32 },
     #[not_found]
     #[at("/404")]
     NotFound,
@@ -59,7 +62,7 @@ fn app() -> Html {
         margin: auto;
     "#
     );
-    let player = use_state(|| None as Option<Player>);
+    let player = use_state(|| None as Option<String>);
     use_effect_with_deps(
         {
             let player = player.clone();
@@ -81,25 +84,25 @@ fn app() -> Html {
     html! {
         <>
             <Global css={glob_style}/>
-            <ContextProvider<Option<Player>> context={(*player).clone()}>
+            <ContextProvider<Option<String>> context={(*player).clone()}>
                 <BrowserRouter>
                     <div class={wrapper_style}>
                         <NavBar />
                         <Switch<Route> render={|r| match r {
-                            Route::Home => html! { <Game /> },
-                            Route::Gallery => html! { <Gallery /> },
+                            Route::Home => html! { <LoginForm create_lobby={true} /> },
+                            Route::Game { room_id } => html! { <Game {room_id} /> },
                             Route::NotFound => html! { "Not found 🤔" },
                         }} />
                     </div>
                 </BrowserRouter>
-            </ContextProvider<Option<Player>>>
+            </ContextProvider<Option<String>>>
         </>
     }
 }
 
 mod components {
     pub mod navbar {
-        use common::{LoginPost, Player};
+        use common::JoinLobbyPost;
         use gloo_net::http::Request;
         use stylist::yew::use_style;
         use wasm_bindgen::JsCast;
@@ -115,7 +118,7 @@ mod components {
         #[function_component]
         pub fn NavBar(props: &NavBarProps) -> Html {
             let NavBarProps {} = props;
-            let player = use_context::<Option<Player>>().unwrap();
+            let player = use_context::<Option<String>>().unwrap();
             let style = use_style!(
                 r#"
                 display: flex;
@@ -138,29 +141,31 @@ mod components {
                 <div class={style}>
                     // <a href="/">{"Draw"}</a>
                     // <a href="/gallery">{"Gallery"}</a>
-                    <Link<Route> to={Route::Home}>{ "Draw" }</Link<Route>>
-                    <Link<Route> to={Route::Gallery}>{ "Gallery" }</Link<Route>>
+                    <Link<Route> to={Route::Home}>{ "Create Lobby" }</Link<Route>>
+                    // <Link<Route> to={Route::Join { room_id: () }}>{ "Gallery" }</Link<Route>>
                     <i style="flex-grow: 1;"></i>
                     {
                         if let Some(p) = player {
                             html! {
                                 <>
-                                    <div>{&format!("Logged in as {}", p.username)}</div>
+                                    <div>{&format!("Logged in as {}", p)}</div>
                                     <a href="/api/logout">{"Log out"}</a>
                                 </>
                             }
                         } else {
-                            html! { <LoginForm /> }
+                            html! { <LoginForm create_lobby={false} /> }
                         }
                     }
                 </div>
             }
         }
         #[derive(PartialEq, Properties)]
-        pub struct LoginFormProps {}
+        pub struct LoginFormProps {
+            pub create_lobby: bool,
+        }
         #[function_component]
         pub fn LoginForm(props: &LoginFormProps) -> Html {
-            let LoginFormProps {} = props;
+            let LoginFormProps { create_lobby } = props;
             let username = use_state(String::new);
             let onchangeu = {
                 let username = username.clone();
@@ -174,44 +179,59 @@ mod components {
                     );
                 })
             };
-            let password = use_state(String::new);
-            let onchangep = {
-                let password = password.clone();
-                Callback::from(move |e: Event| {
-                    let password = password.clone();
-                    password.set(
-                        e.target()
-                            .unwrap()
-                            .unchecked_into::<HtmlInputElement>()
-                            .value(),
-                    );
-                })
-            };
+            // let password = use_state(String::new);
+            // let onchangep = {
+            //     let password = password.clone();
+            //     Callback::from(move |e: Event| {
+            //         let password = password.clone();
+            //         password.set(
+            //             e.target()
+            //                 .unwrap()
+            //                 .unchecked_into::<HtmlInputElement>()
+            //                 .value(),
+            //         );
+            //     })
+            // };
             let onsubmit = {
                 let username = username.clone();
-                let password = password.clone();
+                let create_lobby = create_lobby.clone();
+                // let password = password.clone();
                 Callback::from(move |e: SubmitEvent| {
                     e.prevent_default();
                     let username = username.clone();
-                    let password = password.clone();
+                    let create_lobby = create_lobby.clone();
+                    // let password = password.clone();
                     spawn_local(async move {
-                        Request::post("/api/login")
-                            .json(&LoginPost {
+                        let endp = if create_lobby {
+                            "/api/create_lobby"
+                        } else {
+                            "/api/join_lobby"
+                        };
+                        let resp = Request::post(endp)
+                            .json(&JoinLobbyPost {
                                 username: (*username).clone(),
-                                password: (*password).clone(),
                             })
                             .unwrap()
                             .send()
                             .await
                             .unwrap();
-                        web_sys::window().unwrap().location().reload().unwrap();
+                        if create_lobby {
+                            let room = resp.text().await.unwrap();
+                            web_sys::window()
+                                .unwrap()
+                                .location()
+                                .replace(&format!("/game/{room}"))
+                                .unwrap();
+                        } else {
+                            web_sys::window().unwrap().location().reload().unwrap();
+                        }
                     });
                 })
             };
             html! {
                 <form {onsubmit}>
                     <input type="text" value={(*username).clone()} onchange={onchangeu} />
-                    <input type="password" value={(*password).clone()} onchange={onchangep} />
+                    // <input type="password" value={(*password).clone()} onchange={onchangep} />
                     <input type="submit" value="Log in" />
                 </form>
             }
@@ -228,12 +248,17 @@ mod components {
         use yew::prelude::*;
 
         #[derive(PartialEq, Properties)]
-        pub struct GameProps {}
+        pub struct GameProps {
+            pub room_id: u32,
+        }
 
         #[function_component]
         pub fn Game(props: &GameProps) -> Html {
-            let GameProps {} = props;
-            let gi = use_state(GameInfo::default);
+            let GameProps { room_id } = props;
+            let gi = use_state(|| GameInfo {
+                // room_id: *room_id,
+                ..Default::default()
+            });
             use_effect_with_deps(
                 {
                     let gi = gi.clone();
@@ -659,85 +684,6 @@ mod components {
                         </form>
                     </div>
                 </div>
-            }
-        }
-    }
-    pub mod gallery {
-        use common::DrawCanvas;
-        use gloo_net::http::Request;
-        use stylist::yew::use_style;
-        use wasm_bindgen_futures::spawn_local;
-        use yew::prelude::*;
-
-        use super::pixel::Pixel;
-
-        #[derive(PartialEq, Properties)]
-        pub struct GalleryProps {}
-        #[function_component]
-        pub fn Gallery(props: &GalleryProps) -> Html {
-            let GalleryProps {} = props;
-            let canvasses = use_state(|| vec![] as Vec<DrawCanvas>);
-            use_effect_with_deps(
-                {
-                    let canvasses = canvasses.clone();
-                    |_| {
-                        spawn_local(async move {
-                            let p = Request::get("/api/gallery/canvasses")
-                                .send()
-                                .await
-                                .unwrap()
-                                .json()
-                                .await
-                                .unwrap();
-                            canvasses.set(p);
-                        });
-                    }
-                },
-                (),
-            );
-            let style = use_style!(
-                r#"
-                display: flex;
-                flex-wrap: wrap;
-                justify-content: center;
-                gap: 10px;
-                "#
-            );
-            let canvas_style = use_style!(
-                r#"
-                display: grid;
-                grid-template-columns: repeat(${width}, 1fr);
-                grid-template-rows: repeat(${height}, 1fr);
-                user-select: none;
-            "#,
-                width = 12,
-                height = 12,
-            );
-            html! {
-                <div class={style}>{
-                    canvasses.iter().map(|c| {
-                        let width = c.width;
-                        let height = c.height;
-                        let grid = c.grid.clone();
-                        let s = canvas_style.clone();
-                        html! {
-                            <div class={s}>{
-                                (0..height)
-                                    .map(|y| {
-                                        (0..width)
-                                            .map(|x| {
-                                                let pos = y * height + x;
-                                                html! {
-                                                    <Pixel key={pos} color={grid[pos]} onclick={|_| {}} />
-                                                }
-                                            })
-                                            .collect::<Html>()
-                                    })
-                                    .collect::<Html>()
-                            }</div>
-                        }
-                    }).collect::<Html>()
-                }</div>
             }
         }
     }

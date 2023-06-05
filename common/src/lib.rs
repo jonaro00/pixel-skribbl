@@ -106,14 +106,15 @@ impl Default for GameState {
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GameInfo {
+    // pub room_id: u32,
     pub prompt: String,
     pub players: Vec<Player>,
 }
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct LoginPost {
+#[derive(Serialize, Deserialize)]
+pub struct SessionPlayer {
     pub username: String,
-    pub password: String, // xdd
+    pub room: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +132,11 @@ impl PartialEq for Player {
 pub struct SetPixelPost {
     pub pixel_id: usize,
     pub color: Color,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct JoinLobbyPost {
+    pub username: String,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

@@ -1,43 +1,56 @@
-use std::error::Error;
-use std::sync::Arc;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+use anyhow::{anyhow, Result};
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
-    response::Redirect,
     routing::{get, post},
     Extension, Json, Router,
 };
-use axum_extra::routing::SpaRouter;
 use axum_sessions::{
     async_session::MemoryStore,
     extractors::{ReadableSession, WritableSession},
     SessionLayer,
 };
-use common::{ChatMessage, DrawCanvas, GameState, LoginPost, Player, SetPixelPost};
-use db::DB;
 use rand::Rng;
-use surrealdb::{Datastore, Session};
+use shuttle_axum::ShuttleAxum;
 use tokio::sync::{
     broadcast::{channel, Sender},
     RwLock,
 };
+use tower_http::services::{ServeDir, ServeFile};
 
+use common::{ChatMessage, GameState, JoinLobbyPost, SessionPlayer, SetPixelPost};
+
+#[shuttle_runtime::main]
+async fn axum(#[shuttle_static_folder::StaticFolder] public_folder: PathBuf) -> ShuttleAxum {
+    let app = build_app(public_folder).await?;
+    Ok(app.into())
+}
+
+#[derive(Default)]
 pub struct AppState {
-    pub db: DB,
+    pub rooms: RwLock<HashMap<u32, Arc<RoomState>>>,
+}
+
+pub struct RoomState {
     pub game_state: RwLock<GameState>,
     pub game_channel: Sender<bool>,
     pub canvas_channel: Sender<bool>,
     pub chat_channel: Sender<ChatMessage>,
 }
+impl Default for RoomState {
+    fn default() -> Self {
+        Self {
+            game_state: RwLock::new(GameState::new()),
+            game_channel: channel(128).0,
+            canvas_channel: channel(128).0,
+            chat_channel: channel(128).0,
+        }
+    }
+}
 
-pub async fn build_app() -> Result<Router, Box<dyn Error>> {
-    println!("Connecting to database");
-    let database: DB = (
-        Datastore::new("file://temp.db").await?,
-        Session::for_db("my_ns", "my_db"),
-    );
-
+pub async fn build_app(public_folder: PathBuf) -> Result<Router> {
     // Cookie sessions
     let store = MemoryStore::new();
     let mut arr2 = [0u8; 128];
@@ -45,13 +58,7 @@ pub async fn build_app() -> Result<Router, Box<dyn Error>> {
     let session_layer = SessionLayer::new(store, &arr2);
 
     // Connections, state, and channels for the app
-    let state = Arc::new(AppState {
-        db: database,
-        game_state: RwLock::new(GameState::new()),
-        game_channel: channel(128).0,
-        canvas_channel: channel(128).0,
-        chat_channel: channel(128).0,
-    });
+    let state: Arc<AppState> = Arc::new(Default::default());
     let app = Router::new()
         .route(
             "/ws/canvas",
@@ -69,127 +76,72 @@ pub async fn build_app() -> Result<Router, Box<dyn Error>> {
         .nest(
             "/api",
             Router::new()
+                .route("/create_lobby", post(create_lobby))
+                .route("/join_lobby", post(join_lobby))
+                .route("/player", get(get_player_name))
                 .route("/set_pixel", post(set_pixel_handler))
                 .route("/clear_canvas", get(clear_canvas_handler))
-                .route("/chat", post(chat_handler))
-                .route("/player", get(get_player))
-                .route("/register", post(register))
-                .route("/login", post(login))
-                .route(
-                    "/logout",
-                    get(|mut s: WritableSession| async move {
-                        s.destroy();
-                        Redirect::temporary("/")
-                    }),
-                )
-                .nest(
-                    "/gallery",
-                    Router::new()
-                        .route("/save", get(gallery_save_handler))
-                        .route("/canvasses", get(gallery_canvasses_handler)),
-                ),
+                .route("/chat", post(chat_handler)),
         )
         .route("/favicon.ico", get(|| async move { StatusCode::NOT_FOUND }))
-        .merge(SpaRouter::new("/assets", "frontend/dist").index_file("index.html"))
+        .nest_service(
+            "/",
+            ServeDir::new(public_folder.clone())
+                .not_found_service(ServeFile::new(public_folder.join("index.html"))),
+        )
         .layer(session_layer)
         .with_state(state);
     Ok(app)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let port: u16 = std::env::var("PORT")
-        .unwrap_or_else(|_| "3000".into())
-        .parse()
-        .expect("Invalid PORT variable");
-
-    let app = build_app().await?;
-
-    let addr = format!("0.0.0.0:{port}").parse()?;
-    println!("Listening on {addr}");
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await?;
-
-    Ok(())
-}
-
-async fn register(
+async fn create_lobby(
     mut session: WritableSession,
     State(state): State<Arc<AppState>>,
-    Json(LoginPost { username, password }): Json<LoginPost>,
-) -> StatusCode {
-    let x = db::create_user(&state.db, &username, &password)
-        .await
-        .unwrap();
-    println!("User registered: {x}");
+    Json(JoinLobbyPost { username }): Json<JoinLobbyPost>,
+) -> String {
+    let code: u32 = rand::random();
+    {
+        let mut rooms = state.rooms.write().await;
+        rooms.insert(code, Arc::new(Default::default()));
+    }
     session
         .insert(
             "user",
-            Player {
+            SessionPlayer {
                 username,
-                active: false,
+                room: code,
             },
         )
-        .expect("Insert fail");
-    StatusCode::OK
-}
-async fn login(
-    mut session: WritableSession,
-    State(state): State<Arc<AppState>>,
-    Json(LoginPost { username, password }): Json<LoginPost>,
-) -> StatusCode {
-    let username = db::auth_user(&state.db, &username, &password)
-        .await
         .unwrap();
+    format!("{code}")
+}
+
+async fn join_lobby(
+    mut session: WritableSession,
+    Path(room_id): Path<u32>,
+    // State(state): State<Arc<AppState>>,
+    Json(JoinLobbyPost { username }): Json<JoinLobbyPost>,
+) -> StatusCode {
     session
         .insert(
             "user",
-            Player {
+            SessionPlayer {
                 username,
-                active: false,
+                room: room_id,
             },
         )
-        .expect("Insert fail");
-    StatusCode::OK
-}
-async fn gallery_save_handler(
-    session: ReadableSession,
-    State(state): State<Arc<AppState>>,
-) -> StatusCode {
-    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
-        return StatusCode::UNAUTHORIZED;
-    }
-    let player = session.get::<Player>("user").unwrap();
-    let gs = { (*state.game_state.read().await).clone() };
-    db::save_canvas(&state.db, &player.username, &gs.canvas)
-        .await
         .unwrap();
     StatusCode::OK
 }
-async fn gallery_canvasses_handler(
-    session: ReadableSession,
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<DrawCanvas>> {
-    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
-        return Json(vec![]);
-    }
-    let player = session.get::<Player>("user").unwrap();
-    let v = db::get_canvasses(&state.db, &player.username)
-        .await
-        .unwrap();
-    Json(v)
+
+async fn get_player_name(session: ReadableSession) -> Json<Option<String>> {
+    Json(session.get::<SessionPlayer>("user").map(|p| p.username))
 }
 
-async fn get_player(session: ReadableSession) -> Json<Option<Player>> {
-    Json(session.get::<Player>("user"))
-}
-
-async fn verify_session(session: &ReadableSession) -> StatusCode {
-    match session.get::<Player>("user") {
-        Some(_) => StatusCode::OK,
-        None => StatusCode::UNAUTHORIZED,
-    }
+async fn verify_session(session: &ReadableSession) -> Result<SessionPlayer> {
+    session
+        .get::<SessionPlayer>("user")
+        .ok_or(anyhow!("no playah in this session"))
 }
 
 async fn set_pixel_handler(
@@ -197,14 +149,20 @@ async fn set_pixel_handler(
     State(state): State<Arc<AppState>>,
     Json(SetPixelPost { pixel_id, color }): Json<SetPixelPost>,
 ) -> StatusCode {
-    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
-        return StatusCode::UNAUTHORIZED;
-    }
+    let player = match verify_session(&session).await {
+        Ok(p) => p,
+        Err(_) => return StatusCode::UNAUTHORIZED,
+    };
+    let rooms = state.rooms.read().await;
+    let room = match rooms.get(&player.room) {
+        Some(r) => r.clone(),
+        None => return StatusCode::NOT_FOUND,
+    };
     {
-        let mut gs = state.game_state.write().await;
+        let mut gs = room.game_state.write().await;
         gs.canvas.set_pixel(pixel_id, color);
     }
-    if state.canvas_channel.send(true).is_err() {
+    if room.canvas_channel.send(true).is_err() {
         println!("No receivers");
     }
     StatusCode::OK
@@ -213,14 +171,20 @@ async fn clear_canvas_handler(
     session: ReadableSession,
     State(state): State<Arc<AppState>>,
 ) -> StatusCode {
-    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
-        return StatusCode::UNAUTHORIZED;
-    }
+    let player = match verify_session(&session).await {
+        Ok(p) => p,
+        Err(_) => return StatusCode::UNAUTHORIZED,
+    };
+    let rooms = state.rooms.read().await;
+    let room = match rooms.get(&player.room) {
+        Some(r) => r.clone(),
+        None => return StatusCode::NOT_FOUND,
+    };
     {
-        let mut gs = state.game_state.write().await;
+        let mut gs = room.game_state.write().await;
         gs.canvas.clear();
     }
-    if state.canvas_channel.send(true).is_err() {
+    if room.canvas_channel.send(true).is_err() {
         println!("No receivers");
     }
     StatusCode::OK
@@ -230,17 +194,22 @@ async fn chat_handler(
     State(state): State<Arc<AppState>>,
     Json(chat_message): Json<ChatMessage>,
 ) -> StatusCode {
-    if verify_session(&session).await == StatusCode::UNAUTHORIZED {
-        return StatusCode::UNAUTHORIZED;
-    }
-    let player = session.get::<Player>("user").unwrap();
+    let player = match verify_session(&session).await {
+        Ok(p) => p,
+        Err(_) => return StatusCode::UNAUTHORIZED,
+    };
+    let rooms = state.rooms.read().await;
+    let room = match rooms.get(&player.room) {
+        Some(r) => r.clone(),
+        None => return StatusCode::NOT_FOUND,
+    };
     let username = player.username;
     let text = chat_message.text;
     let correct = {
-        let gs = state.game_state.read().await;
+        let gs = room.game_state.read().await;
         text.trim().to_lowercase() == gs.prompt
     };
-    if state
+    if room
         .chat_channel
         .send(ChatMessage {
             username: username.clone(),
@@ -251,15 +220,15 @@ async fn chat_handler(
         println!("No receivers");
     }
     if correct {
-        let mut gs = state.game_state.write().await;
+        let mut gs = room.game_state.write().await;
         gs.new_round();
-        if state.game_channel.send(true).is_err() {
+        if room.game_channel.send(true).is_err() {
             println!("No receivers");
         }
-        if state.canvas_channel.send(true).is_err() {
+        if room.canvas_channel.send(true).is_err() {
             println!("No receivers");
         }
-        if state
+        if room
             .chat_channel
             .send(ChatMessage {
                 username: "SYSTEM".into(),
@@ -282,7 +251,7 @@ mod ws {
         Extension,
     };
     use axum_sessions::extractors::ReadableSession;
-    use common::{ChatMessage, GameInfo, Player};
+    use common::{ChatMessage, GameInfo, Player, SessionPlayer};
 
     use crate::AppState;
 
@@ -298,32 +267,41 @@ mod ws {
         Extension(app_state): Extension<Arc<AppState>>,
         st: WsStreamType,
     ) -> Response {
-        let player = session.get::<Player>("user");
+        let player = session.get::<SessionPlayer>("user");
         ws.on_upgrade(move |socket| handle_socket(socket, player, app_state, st))
     }
 
     async fn handle_socket(
         mut socket: WebSocket,
-        player: Option<Player>,
+        player: Option<SessionPlayer>,
         state: Arc<AppState>,
         st: WsStreamType,
     ) {
-        let (new, player) = if let Some(player) = player {
-            let mut gs = state.game_state.write().await;
-            (gs.add_player(player.clone()), Some(player))
+        let (new, player, room) = if let Some(player) = player {
+            let rooms = state.rooms.read().await;
+            let room = match rooms.get(&player.room) {
+                Some(r) => r.clone(),
+                None => return,
+            };
+            let mut gs = room.game_state.write().await;
+            let player = Player {
+                username: player.username,
+                active: false,
+            };
+            (gs.add_player(player.clone()), Some(player), room.clone())
         } else {
-            (false, None)
+            return;
         };
         if new {
-            if state.game_channel.send(true).is_err() {
+            if room.game_channel.send(true).is_err() {
                 println!("No receivers");
             }
         }
         match st {
             WsStreamType::Canvas => {
-                let mut rx = state.canvas_channel.subscribe();
+                let mut rx = room.canvas_channel.subscribe();
                 loop {
-                    let gs = { (*state.game_state.read().await).clone() };
+                    let gs = { (*room.game_state.read().await).clone() };
                     if socket
                         .send(Message::from(serde_json::to_string(&gs.canvas).unwrap()))
                         .await
@@ -336,9 +314,9 @@ mod ws {
                 }
             }
             WsStreamType::Game => {
-                let mut rx = state.game_channel.subscribe();
+                let mut rx = room.game_channel.subscribe();
                 loop {
-                    let gs = { (*state.game_state.read().await).clone() };
+                    let gs = { (*room.game_state.read().await).clone() };
                     let prompt = if !player
                         .clone()
                         .map(|ps| gs.players.iter().find(|p| **p == ps).unwrap().active)
@@ -363,9 +341,9 @@ mod ws {
                 }
             }
             WsStreamType::Chat => {
-                let mut rx = state.chat_channel.subscribe();
+                let mut rx = room.chat_channel.subscribe();
                 if player.is_some() {
-                    if state
+                    if room
                         .chat_channel
                         .send(ChatMessage {
                             username: "SYSTEM".into(),
@@ -391,115 +369,5 @@ mod ws {
                 }
             }
         };
-    }
-}
-
-mod db {
-    // SurrealDB start code from https://github.com/jeremychone-channel/rust-surrealdb
-    use anyhow::{anyhow, Result};
-    use common::DrawCanvas;
-    use std::collections::BTreeMap;
-    use surrealdb::{
-        sql::{thing, Object, Value},
-        Datastore, Response, Session,
-    };
-
-    pub type DB = (Datastore, Session);
-
-    pub async fn create_user((ds, ses): &DB, username: &str, password: &str) -> Result<String> {
-        let sql =
-            "CREATE user SET username = $username, password = crypto::scrypt::generate($password)";
-        let vars: BTreeMap<String, Value> = [
-            ("username".into(), username.into()),
-            ("password".into(), password.into()),
-        ]
-        .into();
-        let ress = ds.execute(sql, ses, Some(vars), false).await?;
-
-        into_iter_objects(ress)?
-            .next()
-            .transpose()?
-            .and_then(|obj| obj.get("id").map(|id| id.to_string()))
-            .ok_or_else(|| anyhow!("No id returned."))
-    }
-
-    pub async fn auth_user((ds, ses): &DB, username: &str, password: &str) -> Result<String> {
-        let sql = "SELECT * FROM user WHERE username = $username AND crypto::scrypt::compare(password, $password)";
-        let vars: BTreeMap<String, Value> = [
-            ("username".into(), username.into()),
-            ("password".into(), password.into()),
-        ]
-        .into();
-        let ress = ds.execute(sql, ses, Some(vars), false).await?;
-
-        into_iter_objects(ress)?
-            .next()
-            .transpose()?
-            .and_then(|obj| obj.get("username").map(|id| id.clone().as_string()))
-            .ok_or_else(|| anyhow!("No id returned."))
-    }
-
-    pub async fn save_canvas((ds, ses): &DB, username: &str, canvas: &DrawCanvas) -> Result<()> {
-        let sql = "CREATE canvas SET data = $data";
-        let vars: BTreeMap<String, Value> =
-            [("data".into(), serde_json::to_string(canvas)?.into())].into();
-        let ress = ds.execute(sql, ses, Some(vars), false).await?;
-        let id = into_iter_objects(ress)?
-            .next()
-            .transpose()?
-            .and_then(|obj| obj.get("id").map(|id| id.clone().as_string()))
-            .ok_or_else(|| anyhow!("No id returned."))?;
-        let sql = "UPDATE user SET canvasses += $canvas_id WHERE username = $username";
-        let vars: BTreeMap<String, Value> = [
-            ("canvas_id".into(), thing(&id)?.into()),
-            ("username".into(), username.into()),
-        ]
-        .into();
-        let _ = ds.execute(sql, ses, Some(vars), false).await?;
-        Ok(())
-    }
-
-    pub async fn get_canvasses((ds, ses): &DB, username: &str) -> Result<Vec<DrawCanvas>> {
-        let sql = "SELECT canvasses FROM user WHERE username = $username FETCH canvasses";
-        let vars: BTreeMap<String, Value> = [("username".into(), username.into())].into();
-        let ress = ds.execute(sql, ses, Some(vars), false).await?;
-        let x = into_iter_objects(ress)?
-            .next()
-            .transpose()?
-            .and_then(|obj| {
-                obj.get("canvasses").map(|c| match c {
-                    Value::Array(vec) => vec
-                        .iter()
-                        .filter(|cv| matches!(cv, Value::Object(_)))
-                        .map(|cv| match cv {
-                            Value::Object(o) => serde_json::from_str::<DrawCanvas>(
-                                &o.get("data").unwrap().clone().as_string(),
-                            )
-                            .map_err(|_| anyhow!("u suck")),
-                            _ => Err(anyhow!("xdd")),
-                        })
-                        .collect(),
-                    _ => vec![],
-                })
-            })
-            .ok_or_else(|| anyhow!("xdd"))?
-            .into_iter()
-            .map(|r| r.unwrap())
-            .collect();
-        Ok(x)
-    }
-
-    fn into_iter_objects(ress: Vec<Response>) -> Result<impl Iterator<Item = Result<Object>>> {
-        let res = ress.into_iter().next().map(|rp| rp.result).transpose()?;
-        match res {
-            Some(Value::Array(arr)) => {
-                let it = arr.into_iter().map(|v| match v {
-                    Value::Object(object) => Ok(object),
-                    _ => Err(anyhow!("A record was not an Object")),
-                });
-                Ok(it)
-            }
-            _ => Err(anyhow!("No records found.")),
-        }
     }
 }
