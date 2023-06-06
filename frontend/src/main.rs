@@ -1,7 +1,4 @@
-use components::{
-    game::Game,
-    navbar::{LoginForm, NavBar},
-};
+use components::{game::Game, navbar::LoginForm};
 use gloo_net::http::Request;
 use stylist::{
     css,
@@ -20,7 +17,7 @@ enum Route {
     #[at("/")]
     Home,
     #[at("/game/:room_id")]
-    Game { room_id: u32 },
+    Game { room_id: String },
     #[not_found]
     #[at("/404")]
     NotFound,
@@ -85,7 +82,6 @@ fn app() -> Html {
             <ContextProvider<Option<String>> context={(*player).clone()}>
                 <BrowserRouter>
                     <div class={wrapper_style}>
-                        <NavBar />
                         <Switch<Route> render={|r| match r {
                             Route::Home => html! { <LoginForm create_lobby={true} /> },
                             Route::Game { room_id } => html! { <Game {room_id} /> },
@@ -100,16 +96,13 @@ fn app() -> Html {
 
 mod components {
     pub mod navbar {
-        use common::JoinLobbyPost;
+        use common::{GameInfo, JoinLobbyPost};
         use gloo_net::http::Request;
         use stylist::yew::use_style;
         use wasm_bindgen::JsCast;
         use wasm_bindgen_futures::spawn_local;
         use web_sys::HtmlInputElement;
         use yew::prelude::*;
-        use yew_router::prelude::*;
-
-        use crate::Route;
 
         #[derive(PartialEq, Properties)]
         pub struct NavBarProps {}
@@ -117,6 +110,8 @@ mod components {
         pub fn NavBar(props: &NavBarProps) -> Html {
             let NavBarProps {} = props;
             let player = use_context::<Option<String>>().unwrap();
+            let game_info = use_context::<GameInfo>().unwrap();
+            let room_id = game_info.room_id;
             let style = use_style!(
                 r#"
                 display: flex;
@@ -137,21 +132,18 @@ mod components {
             );
             html! {
                 <div class={style}>
-                    // <a href="/">{"Draw"}</a>
-                    // <a href="/gallery">{"Gallery"}</a>
-                    <Link<Route> to={Route::Home}>{ "Create Lobby" }</Link<Route>>
-                    // <Link<Route> to={Route::Join { room_id: () }}>{ "Gallery" }</Link<Route>>
+                    <a href="/">{ "Create Lobby" }</a>
                     <i style="flex-grow: 1;"></i>
                     {
                         if let Some(p) = player {
                             html! {
                                 <>
-                                    <div>{&format!("Logged in as {}", p)}</div>
-                                    <a href="/api/logout">{"Log out"}</a>
+                                    <div>{&format!("Playing as \"{p}\"")}</div>
+                                    <a href="/api/leave_lobby">{"Leave game"}</a>
                                 </>
                             }
                         } else {
-                            html! { <LoginForm create_lobby={false} /> }
+                            html! { <LoginForm create_lobby={false} room_to_join={Some(room_id)} /> }
                         }
                     }
                 </div>
@@ -160,10 +152,14 @@ mod components {
         #[derive(PartialEq, Properties)]
         pub struct LoginFormProps {
             pub create_lobby: bool,
+            pub room_to_join: Option<String>,
         }
         #[function_component]
         pub fn LoginForm(props: &LoginFormProps) -> Html {
-            let LoginFormProps { create_lobby } = props;
+            let LoginFormProps {
+                create_lobby,
+                room_to_join,
+            } = props;
             let username = use_state(String::new);
             let onchangeu = {
                 let username = username.clone();
@@ -177,35 +173,22 @@ mod components {
                     );
                 })
             };
-            // let password = use_state(String::new);
-            // let onchangep = {
-            //     let password = password.clone();
-            //     Callback::from(move |e: Event| {
-            //         let password = password.clone();
-            //         password.set(
-            //             e.target()
-            //                 .unwrap()
-            //                 .unchecked_into::<HtmlInputElement>()
-            //                 .value(),
-            //         );
-            //     })
-            // };
             let onsubmit = {
                 let username = username.clone();
                 let create_lobby = create_lobby.clone();
-                // let password = password.clone();
+                let room_to_join = room_to_join.clone();
                 Callback::from(move |e: SubmitEvent| {
                     e.prevent_default();
                     let username = username.clone();
                     let create_lobby = create_lobby.clone();
-                    // let password = password.clone();
+                    let room_to_join = room_to_join.clone();
                     spawn_local(async move {
                         let endp = if create_lobby {
-                            "/api/create_lobby"
+                            "/api/create_lobby".to_string()
                         } else {
-                            "/api/join_lobby"
+                            format!("/api/join_lobby/{}", room_to_join.unwrap())
                         };
-                        let resp = Request::post(endp)
+                        let resp = Request::post(&endp)
                             .json(&JoinLobbyPost {
                                 username: (*username).clone(),
                             })
@@ -236,7 +219,7 @@ mod components {
         }
     }
     pub mod game {
-        use super::{canvas::Canvas, chat::Chat};
+        use super::{canvas::Canvas, chat::Chat, navbar::NavBar};
         use common::GameInfo;
         use futures::StreamExt;
         use gloo_net::websocket::{futures::WebSocket, Message};
@@ -247,25 +230,26 @@ mod components {
 
         #[derive(PartialEq, Properties)]
         pub struct GameProps {
-            pub room_id: u32,
+            pub room_id: String,
         }
 
         #[function_component]
         pub fn Game(props: &GameProps) -> Html {
             let GameProps { room_id } = props;
             let gi = use_state(|| GameInfo {
-                // room_id: *room_id,
+                room_id: room_id.clone(),
                 ..Default::default()
             });
             use_effect_with_deps(
                 {
                     let gi = gi.clone();
-                    |_| {
+                    let room_id = room_id.clone();
+                    move |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
                         let secure =
                             web_sys::window().unwrap().location().protocol().unwrap() == "https:";
                         let ws = WebSocket::open(&format!(
-                            "ws{}://{host}/ws/game",
+                            "ws{}://{host}/ws/{room_id}/game",
                             if secure { "s" } else { "" }
                         ))
                         .unwrap();
@@ -297,6 +281,7 @@ mod components {
             html! {
                 <div class={style}>
                     <ContextProvider<GameInfo> context={(*gi).clone()}>
+                        <NavBar />
                         <Canvas />
                         <Chat />
                     </ContextProvider<GameInfo>>
@@ -326,6 +311,7 @@ mod components {
             let grid = use_state_eq(|| dc.grid);
 
             let game_info = use_context::<GameInfo>().unwrap();
+            let room_id = game_info.room_id;
             let prompt = game_info.prompt;
 
             let selected_color = use_state(|| Color::Black);
@@ -333,12 +319,13 @@ mod components {
             use_effect_with_deps(
                 {
                     let grid = grid.clone();
-                    |_| {
+                    let room_id = room_id.clone();
+                    move |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
                         let secure =
                             web_sys::window().unwrap().location().protocol().unwrap() == "https:";
                         let ws = WebSocket::open(&format!(
-                            "ws{}://{host}/ws/canvas",
+                            "ws{}://{host}/ws/{room_id}/canvas",
                             if secure { "s" } else { "" }
                         ))
                         .unwrap();
@@ -480,16 +467,6 @@ mod components {
                                 });
                             })
                         }} class="selectColor white">{ "Clear" }</div>
-                        <div onclick={{
-                            Callback::from(move |_| {
-                                spawn_local(async move {
-                                    Request::get("/api/gallery/save")
-                                        .send()
-                                        .await
-                                        .unwrap();
-                                });
-                            })
-                        }} class="selectColor white">{ "Save" }</div>
                     </div>
                 </div>
             }
@@ -552,6 +529,7 @@ mod components {
             let messages_update = use_force_update();
             let text = use_state(String::new);
             let game_info = use_context::<GameInfo>().unwrap();
+            let room_id = game_info.room_id;
             let players = game_info.players;
             let onchange = {
                 let text = text.clone();
@@ -589,12 +567,13 @@ mod components {
             use_effect_with_deps(
                 {
                     let messages = messages.clone();
-                    |_| {
+                    let room_id = room_id.clone();
+                    move |_| {
                         let host = web_sys::window().unwrap().location().host().unwrap();
                         let secure =
                             web_sys::window().unwrap().location().protocol().unwrap() == "https:";
                         let ws = WebSocket::open(&format!(
-                            "ws{}://{host}/ws/chat",
+                            "ws{}://{host}/ws/{room_id}/chat",
                             if secure { "s" } else { "" }
                         ))
                         .unwrap();

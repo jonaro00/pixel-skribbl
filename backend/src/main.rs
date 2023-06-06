@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    response::Redirect,
     routing::{get, post},
     Extension, Json, Router,
 };
@@ -20,11 +21,11 @@ use tokio::sync::{
 };
 use tower_http::services::{ServeDir, ServeFile};
 
-use common::{ChatMessage, GameState, JoinLobbyPost, SessionPlayer, SetPixelPost};
+use common::{ChatMessage, GameState, JoinLobbyPost, Player, SessionPlayer, SetPixelPost};
 
 #[shuttle_runtime::main]
 async fn axum(
-    #[shuttle_static_folder::StaticFolder(folder = "../static")] public_folder: PathBuf,
+    #[shuttle_static_folder::StaticFolder(folder = "static")] public_folder: PathBuf,
 ) -> ShuttleAxum {
     let app = build_app(public_folder).await?;
     Ok(app.into())
@@ -36,14 +37,16 @@ pub struct AppState {
 }
 
 pub struct RoomState {
+    pub room_id: String,
     pub game_state: RwLock<GameState>,
     pub game_channel: Sender<bool>,
     pub canvas_channel: Sender<bool>,
     pub chat_channel: Sender<ChatMessage>,
 }
-impl Default for RoomState {
-    fn default() -> Self {
+impl RoomState {
+    fn new(room_id: String) -> Self {
         Self {
+            room_id,
             game_state: RwLock::new(GameState::new()),
             game_channel: channel(128).0,
             canvas_channel: channel(128).0,
@@ -63,23 +66,24 @@ pub async fn build_app(public_folder: PathBuf) -> Result<Router> {
     let state: Arc<AppState> = Arc::new(Default::default());
     let app = Router::new()
         .route(
-            "/ws/canvas",
-            get(|w, s, e| ws::ws_handler(w, s, e, ws::WsStreamType::Canvas)),
+            "/ws/:room_id/canvas",
+            get(|w, s, p, e| ws::ws_handler(w, s, p, e, ws::WsStreamType::Canvas)),
         )
         .route(
-            "/ws/game",
-            get(|w, s, e| ws::ws_handler(w, s, e, ws::WsStreamType::Game)),
+            "/ws/:room_id/game",
+            get(|w, s, p, e| ws::ws_handler(w, s, p, e, ws::WsStreamType::Game)),
         )
         .route(
-            "/ws/chat",
-            get(|w, s, e| ws::ws_handler(w, s, e, ws::WsStreamType::Chat)),
+            "/ws/:room_id/chat",
+            get(|w, s, p, e| ws::ws_handler(w, s, p, e, ws::WsStreamType::Chat)),
         )
         .layer(Extension(state.clone()))
         .nest(
             "/api",
             Router::new()
                 .route("/create_lobby", post(create_lobby))
-                .route("/join_lobby", post(join_lobby))
+                .route("/join_lobby/:room_id", post(join_lobby))
+                .route("/leave_lobby", get(leave_lobby))
                 .route("/player", get(get_player_name))
                 .route("/set_pixel", post(set_pixel_handler))
                 .route("/clear_canvas", get(clear_canvas_handler))
@@ -104,7 +108,7 @@ async fn create_lobby(
     let code: u32 = rand::random();
     {
         let mut rooms = state.rooms.write().await;
-        rooms.insert(code, Arc::new(Default::default()));
+        rooms.insert(code, Arc::new(RoomState::new(format!("{code}"))));
     }
     session
         .insert(
@@ -121,7 +125,6 @@ async fn create_lobby(
 async fn join_lobby(
     mut session: WritableSession,
     Path(room_id): Path<u32>,
-    // State(state): State<Arc<AppState>>,
     Json(JoinLobbyPost { username }): Json<JoinLobbyPost>,
 ) -> StatusCode {
     session
@@ -136,6 +139,36 @@ async fn join_lobby(
     StatusCode::OK
 }
 
+async fn leave_lobby(mut session: WritableSession, State(state): State<Arc<AppState>>) -> Redirect {
+    let player = session.get::<SessionPlayer>("user");
+    session.destroy();
+    if let Some(player) = player {
+        {
+            let mut rooms = state.rooms.write().await;
+            let room = match rooms.get(&player.room) {
+                Some(r) => r.clone(),
+                None => return Redirect::to("/"),
+            };
+            let mut gs = room.game_state.write().await;
+            let advance = gs.remove_player(Player {
+                username: player.username,
+                active: false,
+            });
+            if gs.players.is_empty() {
+                rooms.remove(&player.room);
+                return Redirect::to("/");
+            }
+            if advance {
+                gs.new_round();
+            }
+            if room.game_channel.send(true).is_err() {
+                println!("No receivers");
+            }
+        }
+    }
+    Redirect::to("/")
+}
+
 async fn get_player_name(session: ReadableSession) -> Json<Option<String>> {
     Json(session.get::<SessionPlayer>("user").map(|p| p.username))
 }
@@ -143,7 +176,7 @@ async fn get_player_name(session: ReadableSession) -> Json<Option<String>> {
 async fn verify_session(session: &ReadableSession) -> Result<SessionPlayer> {
     session
         .get::<SessionPlayer>("user")
-        .ok_or(anyhow!("no playah in this session"))
+        .ok_or(anyhow!("no player in this session"))
 }
 
 async fn set_pixel_handler(
@@ -248,7 +281,10 @@ mod ws {
     use std::sync::Arc;
 
     use axum::{
-        extract::ws::{Message, WebSocket, WebSocketUpgrade},
+        extract::{
+            ws::{Message, WebSocket, WebSocketUpgrade},
+            Path,
+        },
         response::Response,
         Extension,
     };
@@ -266,33 +302,35 @@ mod ws {
     pub async fn ws_handler(
         ws: WebSocketUpgrade,
         session: ReadableSession,
+        Path(room_id): Path<u32>,
         Extension(app_state): Extension<Arc<AppState>>,
         st: WsStreamType,
     ) -> Response {
         let player = session.get::<SessionPlayer>("user");
-        ws.on_upgrade(move |socket| handle_socket(socket, player, app_state, st))
+        ws.on_upgrade(move |socket| handle_socket(socket, player, room_id, app_state, st))
     }
 
     async fn handle_socket(
         mut socket: WebSocket,
         player: Option<SessionPlayer>,
+        room_id: u32,
         state: Arc<AppState>,
         st: WsStreamType,
     ) {
-        let (new, player, room) = if let Some(player) = player {
-            let rooms = state.rooms.read().await;
-            let room = match rooms.get(&player.room) {
-                Some(r) => r.clone(),
-                None => return,
-            };
+        let rooms = state.rooms.read().await;
+        let room = match rooms.get(&room_id) {
+            Some(r) => r.clone(),
+            None => return,
+        };
+        let (new, player) = if let Some(player) = player {
             let mut gs = room.game_state.write().await;
             let player = Player {
                 username: player.username,
                 active: false,
             };
-            (gs.add_player(player.clone()), Some(player), room.clone())
+            (gs.add_player(player.clone()), Some(player))
         } else {
-            return;
+            (false, None)
         };
         if new {
             if room.game_channel.send(true).is_err() {
@@ -331,7 +369,12 @@ mod ws {
                     let players = gs.players;
                     if socket
                         .send(Message::from(
-                            serde_json::to_string(&GameInfo { prompt, players }).unwrap(),
+                            serde_json::to_string(&GameInfo {
+                                room_id: room.room_id.clone(),
+                                prompt,
+                                players,
+                            })
+                            .unwrap(),
                         ))
                         .await
                         .is_err()

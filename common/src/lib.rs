@@ -76,6 +76,7 @@ impl GameState {
             }
         }
     }
+    /// Returns whether player was added
     pub fn add_player(&mut self, mut player: Player) -> bool {
         if self.players.contains(&player) {
             return false;
@@ -83,6 +84,14 @@ impl GameState {
         player.active = self.players.is_empty();
         self.players.push(player);
         true
+    }
+    /// Returns whether game should move to next round
+    pub fn remove_player(&mut self, player: Player) -> bool {
+        self.players
+            .iter()
+            .find(|p| **p == player)
+            .map(|p| p.active)
+            .unwrap_or_default()
     }
     pub fn new_round(&mut self) {
         self.canvas.clear();
@@ -106,7 +115,7 @@ impl Default for GameState {
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GameInfo {
-    // pub room_id: u32,
+    pub room_id: String,
     pub prompt: String,
     pub players: Vec<Player>,
 }
