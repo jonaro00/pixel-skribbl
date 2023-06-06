@@ -11,8 +11,6 @@ use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-use common::Player;
-
 fn main() {
     yew::Renderer::<App>::new().render();
 }

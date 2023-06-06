@@ -1,2 +1,2 @@
 # Cargo watch ignore frontend, since trunk is serving that
-frontend/
+# frontend/

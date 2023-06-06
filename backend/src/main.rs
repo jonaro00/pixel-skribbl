@@ -23,7 +23,9 @@ use tower_http::services::{ServeDir, ServeFile};
 use common::{ChatMessage, GameState, JoinLobbyPost, SessionPlayer, SetPixelPost};
 
 #[shuttle_runtime::main]
-async fn axum(#[shuttle_static_folder::StaticFolder] public_folder: PathBuf) -> ShuttleAxum {
+async fn axum(
+    #[shuttle_static_folder::StaticFolder(folder = "../static")] public_folder: PathBuf,
+) -> ShuttleAxum {
     let app = build_app(public_folder).await?;
     Ok(app.into())
 }
