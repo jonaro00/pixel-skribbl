@@ -25,7 +25,7 @@ use common::{ChatMessage, GameState, JoinLobbyPost, Player, SessionPlayer, SetPi
 
 #[shuttle_runtime::main]
 async fn axum(
-    #[shuttle_static_folder::StaticFolder(folder = "static")] public_folder: PathBuf,
+    #[shuttle_static_folder::StaticFolder(folder = "static2")] public_folder: PathBuf,
 ) -> ShuttleAxum {
     let app = build_app(public_folder).await?;
     Ok(app.into())
