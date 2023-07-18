@@ -1,3 +1,2 @@
 target
-static
-backend/static
+frontend/dist

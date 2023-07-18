@@ -1,6 +1,2 @@
-# Cargo watch ignore frontend, since trunk is serving that
-# frontend/
-
 # Shuttle deploy should not ignore the static files
-# !backend/static
-!static
+!frontend/dist

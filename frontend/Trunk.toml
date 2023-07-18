@@ -1,6 +1,5 @@
 [build]
 public_url = "/"
-dist = "../backend/static"
 
 [watch]
 watch = [".", "../common"]
