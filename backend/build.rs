@@ -5,12 +5,16 @@ fn main() {
     {
         if !std::process::Command::new("trunk")
             .args(["build", "--release"])
-            .current_dir("frontend")
+            .current_dir("../frontend")
+            .env(
+                "CARGO_TARGET_DIR",
+                "/opt/shuttle/shuttle-builds/extratarget",
+            )
             .status()
             .expect("failed to run trunk")
             .success()
         {
-            panic!("failed to run trunk")
+            panic!("trunk did not succeed")
         }
     }
 }

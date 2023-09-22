@@ -5,16 +5,16 @@ public_url = "/"
 watch = [".", "../common"]
 
 [[proxy]]
-backend = "http://localhost:3000/api"
+backend = "http://localhost:8000/api"
 
 [[proxy]]
-backend = "ws://localhost:3000/ws/game"
+backend = "ws://localhost:8000/ws/game"
 ws = true
 
 [[proxy]]
-backend = "ws://localhost:3000/ws/canvas"
+backend = "ws://localhost:8000/ws/canvas"
 ws = true
 
 [[proxy]]
-backend = "ws://localhost:3000/ws/chat"
+backend = "ws://localhost:8000/ws/chat"
 ws = true

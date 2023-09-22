@@ -1,2 +1,0 @@
-# Shuttle deploy should not ignore the static files
-!frontend/dist

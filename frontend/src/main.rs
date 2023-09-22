@@ -211,9 +211,10 @@ mod components {
             };
             html! {
                 <form {onsubmit}>
-                    <input type="text" value={(*username).clone()} onchange={onchangeu} />
+                    <label for="ilogin">{"Username: "}</label>
+                    <input id="ilogin" type="text" value={(*username).clone()} onchange={onchangeu} />
                     // <input type="password" value={(*password).clone()} onchange={onchangep} />
-                    <input type="submit" value="Log in" />
+                    <input type="submit" value="Enter" />
                 </form>
             }
         }

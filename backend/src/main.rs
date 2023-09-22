@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, Result};
 use axum::{
@@ -25,7 +25,7 @@ use common::{ChatMessage, GameState, JoinLobbyPost, Player, SessionPlayer, SetPi
 
 #[shuttle_runtime::main]
 async fn axum() -> ShuttleAxum {
-    let app = build_app("frontend/dist".into()).await?;
+    let app = build_app().await?;
     Ok(app.into())
 }
 
@@ -53,7 +53,7 @@ impl RoomState {
     }
 }
 
-pub async fn build_app(public_folder: PathBuf) -> Result<Router> {
+pub async fn build_app() -> Result<Router> {
     // Cookie sessions
     let store = MemoryStore::new();
     let mut arr2 = [0u8; 128];
@@ -90,8 +90,8 @@ pub async fn build_app(public_folder: PathBuf) -> Result<Router> {
         .route("/favicon.ico", get(|| async move { StatusCode::NOT_FOUND }))
         .nest_service(
             "/",
-            ServeDir::new(public_folder.clone())
-                .not_found_service(ServeFile::new(public_folder.join("index.html"))),
+            ServeDir::new("frontend/dist")
+                .not_found_service(ServeFile::new("frontend/dist/index.html")),
         )
         .layer(session_layer)
         .with_state(state);
