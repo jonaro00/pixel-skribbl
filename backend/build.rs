@@ -1,8 +1,5 @@
 fn main() {
-    if std::env::var("HOSTNAME")
-        .unwrap_or_default()
-        .contains("shuttle")
-    {
+    if std::env::var("SHUTTLE").is_ok() {
         if !std::process::Command::new("trunk")
             .args(["build", "--release"])
             .current_dir("../frontend")
