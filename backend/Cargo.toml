@@ -5,13 +5,13 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-axum = { version = "0.6", features = ["ws"] }
-axum-sessions = "0.5"
+axum = { version = "0.7", features = ["ws"] }
 common = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-shuttle-axum = "0.35.0"
-shuttle-runtime = "0.35.0"
-tower-http = { version = "0.4.0", features = ["fs"] }
+shuttle-axum = "0.48.0"
+shuttle-runtime = "0.48.0"
+tower-http = { version = "0.6.0", features = ["fs"] }
+tower-sessions = "0.13"
 tokio = { version = "1", features = ["full"] }

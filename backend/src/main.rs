@@ -8,18 +8,13 @@ use axum::{
     routing::{get, post},
     Extension, Json, Router,
 };
-use axum_sessions::{
-    async_session::MemoryStore,
-    extractors::{ReadableSession, WritableSession},
-    SessionLayer,
-};
-use rand::Rng;
 use shuttle_axum::ShuttleAxum;
 use tokio::sync::{
     broadcast::{channel, Sender},
     RwLock,
 };
 use tower_http::services::{ServeDir, ServeFile};
+use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 
 use common::{ChatMessage, GameState, JoinLobbyPost, Player, SessionPlayer, SetPixelPost};
 
@@ -55,10 +50,8 @@ impl RoomState {
 
 pub async fn build_app() -> Result<Router> {
     // Cookie sessions
-    let store = MemoryStore::new();
-    let mut arr2 = [0u8; 128];
-    rand::thread_rng().fill(&mut arr2);
-    let session_layer = SessionLayer::new(store, &arr2);
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store).with_secure(false);
 
     // Connections, state, and channels for the app
     let state: Arc<AppState> = Arc::new(Default::default());
@@ -99,7 +92,7 @@ pub async fn build_app() -> Result<Router> {
 }
 
 async fn create_lobby(
-    mut session: WritableSession,
+    session: Session,
     State(state): State<Arc<AppState>>,
     Json(JoinLobbyPost { username }): Json<JoinLobbyPost>,
 ) -> String {
@@ -116,12 +109,13 @@ async fn create_lobby(
                 room: code,
             },
         )
+        .await
         .unwrap();
     format!("{code}")
 }
 
 async fn join_lobby(
-    mut session: WritableSession,
+    session: Session,
     Path(room_id): Path<u32>,
     Json(JoinLobbyPost { username }): Json<JoinLobbyPost>,
 ) -> StatusCode {
@@ -133,13 +127,14 @@ async fn join_lobby(
                 room: room_id,
             },
         )
+        .await
         .unwrap();
     StatusCode::OK
 }
 
-async fn leave_lobby(mut session: WritableSession, State(state): State<Arc<AppState>>) -> Redirect {
-    let player = session.get::<SessionPlayer>("user");
-    session.destroy();
+async fn leave_lobby(session: Session, State(state): State<Arc<AppState>>) -> Redirect {
+    let player = session.get::<SessionPlayer>("user").await.unwrap();
+    session.delete().await.unwrap();
     if let Some(player) = player {
         {
             let mut rooms = state.rooms.write().await;
@@ -167,18 +162,26 @@ async fn leave_lobby(mut session: WritableSession, State(state): State<Arc<AppSt
     Redirect::to("/")
 }
 
-async fn get_player_name(session: ReadableSession) -> Json<Option<String>> {
-    Json(session.get::<SessionPlayer>("user").map(|p| p.username))
+async fn get_player_name(session: Session) -> Json<Option<String>> {
+    Json(
+        session
+            .get::<SessionPlayer>("user")
+            .await
+            .unwrap()
+            .map(|p| p.username),
+    )
 }
 
-async fn verify_session(session: &ReadableSession) -> Result<SessionPlayer> {
+async fn verify_session(session: &Session) -> Result<SessionPlayer> {
     session
         .get::<SessionPlayer>("user")
+        .await
+        .unwrap()
         .ok_or(anyhow!("no player in this session"))
 }
 
 async fn set_pixel_handler(
-    session: ReadableSession,
+    session: Session,
     State(state): State<Arc<AppState>>,
     Json(SetPixelPost { pixel_id, color }): Json<SetPixelPost>,
 ) -> StatusCode {
@@ -200,10 +203,7 @@ async fn set_pixel_handler(
     }
     StatusCode::OK
 }
-async fn clear_canvas_handler(
-    session: ReadableSession,
-    State(state): State<Arc<AppState>>,
-) -> StatusCode {
+async fn clear_canvas_handler(session: Session, State(state): State<Arc<AppState>>) -> StatusCode {
     let player = match verify_session(&session).await {
         Ok(p) => p,
         Err(_) => return StatusCode::UNAUTHORIZED,
@@ -223,7 +223,7 @@ async fn clear_canvas_handler(
     StatusCode::OK
 }
 async fn chat_handler(
-    session: ReadableSession,
+    session: Session,
     State(state): State<Arc<AppState>>,
     Json(chat_message): Json<ChatMessage>,
 ) -> StatusCode {
@@ -286,8 +286,8 @@ mod ws {
         response::Response,
         Extension,
     };
-    use axum_sessions::extractors::ReadableSession;
     use common::{ChatMessage, GameInfo, Player, SessionPlayer};
+    use tower_sessions::Session;
 
     use crate::AppState;
 
@@ -299,12 +299,12 @@ mod ws {
 
     pub async fn ws_handler(
         ws: WebSocketUpgrade,
-        session: ReadableSession,
+        session: Session,
         Path(room_id): Path<u32>,
         Extension(app_state): Extension<Arc<AppState>>,
         st: WsStreamType,
     ) -> Response {
-        let player = session.get::<SessionPlayer>("user");
+        let player = session.get::<SessionPlayer>("user").await.unwrap();
         ws.on_upgrade(move |socket| handle_socket(socket, player, room_id, app_state, st))
     }
 
@@ -330,10 +330,8 @@ mod ws {
         } else {
             (false, None)
         };
-        if new {
-            if room.game_channel.send(true).is_err() {
-                println!("No receivers");
-            }
+        if new && room.game_channel.send(true).is_err() {
+            println!("No receivers");
         }
         match st {
             WsStreamType::Canvas => {
@@ -385,17 +383,16 @@ mod ws {
             }
             WsStreamType::Chat => {
                 let mut rx = room.chat_channel.subscribe();
-                if player.is_some() {
-                    if room
+                if player.is_some()
+                    && room
                         .chat_channel
                         .send(ChatMessage {
                             username: "SYSTEM".into(),
                             text: format!("{} joined!", player.clone().unwrap().username),
                         })
                         .is_err()
-                    {
-                        println!("No receivers");
-                    }
+                {
+                    println!("No receivers");
                 }
                 loop {
                     let msg = rx.recv().await.expect("Channel recv error");

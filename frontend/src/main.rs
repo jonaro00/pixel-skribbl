@@ -175,12 +175,12 @@ mod components {
             };
             let onsubmit = {
                 let username = username.clone();
-                let create_lobby = create_lobby.clone();
+                let create_lobby = *create_lobby;
                 let room_to_join = room_to_join.clone();
                 Callback::from(move |e: SubmitEvent| {
                     e.prevent_default();
                     let username = username.clone();
-                    let create_lobby = create_lobby.clone();
+                    let create_lobby = create_lobby;
                     let room_to_join = room_to_join.clone();
                     spawn_local(async move {
                         let endp = if create_lobby {
@@ -263,7 +263,6 @@ mod components {
                             }
                             console::log_1(&"Game WebSocket Closed".into());
                         });
-                        ()
                     }
                 },
                 (),
@@ -339,7 +338,6 @@ mod components {
                             }
                             console::log_1(&"Canvas WebSocket Closed".into());
                         });
-                        ()
                     }
                 },
                 (),
@@ -589,7 +587,6 @@ mod components {
                             console::log_1(&"Chat WebSocket Closed".into());
                         };
                         spawn_local(f);
-                        ()
                     }
                 },
                 (),
